@@ -1,4 +1,4 @@
-# Stroke AI Study – demo platform v1.0
+# Stroke AI Study – demo platform
 
 Research website and role-based platform for the study *Computer-aided Detection and Classification of Ischemic Strokes from MRI Images in LMIC*. Everything runs in the browser on dummy data, so it can be demoed without a backend.
 
