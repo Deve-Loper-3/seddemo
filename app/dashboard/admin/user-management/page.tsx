@@ -1,163 +1,295 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import { useMemo, useState } from "react"
+import { Ban, CheckCircle2, KeyRound, Pencil, Search, Trash2, UserPlus, Users } from "lucide-react"
+import { toast } from "sonner"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import Link from "next/link"
-import { ArrowLeft, Users, Plus, Edit, Trash2, Shield } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { PageHeader } from "@/components/dashboard-shell"
+import { StatCard } from "@/components/common"
+import { useDB, useStore } from "@/lib/store"
+import { fromNow } from "@/lib/metrics"
+import { ROLE_LABELS, type Role, type User } from "@/lib/types"
 
-const USERS = [
-  {
-    id: "USR-001",
-    name: "Dr. Sarah Chen",
-    email: "sarah.chen@hospital.org",
-    role: "doctor",
-    institution: "City General Hospital",
-    status: "active",
-    lastLogin: "2024-01-15 14:23",
-  },
-  {
-    id: "USR-002",
-    name: "Dr. Michael Torres",
-    email: "m.torres@medcenter.org",
-    role: "radiologist",
-    institution: "Medical Center",
-    status: "active",
-    lastLogin: "2024-01-15 13:45",
-  },
-  {
-    id: "USR-003",
-    name: "Emily Rodriguez",
-    email: "e.rodriguez@hospital.org",
-    role: "data-entry",
-    institution: "City General Hospital",
-    status: "active",
-    lastLogin: "2024-01-15 12:30",
-  },
-  {
-    id: "USR-004",
-    name: "Dr. James Wilson",
-    email: "j.wilson@research.org",
-    role: "analyst",
-    institution: "Research Institute",
-    status: "active",
-    lastLogin: "2024-01-14 16:12",
-  },
-  {
-    id: "USR-005",
-    name: "Dr. Lisa Anderson",
-    email: "l.anderson@hospital.org",
-    role: "doctor",
-    institution: "City General Hospital",
-    status: "inactive",
-    lastLogin: "2023-12-20 10:15",
-  },
-]
+type FormState = { id?: string; name: string; email: string; password: string; role: Role; site: string; status: User["status"] }
 
 export default function UserManagementPage() {
-  const router = useRouter()
+  const db = useDB()
+  const { user: me, addUser, updateUser, deleteUser } = useStore()
+  const [q, setQ] = useState("")
+  const [roleFilter, setRoleFilter] = useState("all")
+  const [form, setForm] = useState<FormState | null>(null)
+  const [deleting, setDeleting] = useState<User | null>(null)
+  const [error, setError] = useState("")
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "admin") {
-      router.push("/login")
+  const users = useMemo(() => {
+    const n = q.trim().toLowerCase()
+    return db.users
+      .filter((u) => roleFilter === "all" || u.role === roleFilter)
+      .filter((u) => !n || `${u.name} ${u.email} ${u.site}`.toLowerCase().includes(n))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [db.users, q, roleFilter])
+
+  const openNew = () => {
+    setError("")
+    setForm({ name: "", email: "", password: "", role: "data-entry", site: db.sites[0], status: "active" })
+  }
+  const openEdit = (u: User) => {
+    setError("")
+    setForm({ id: u.id, name: u.name, email: u.email, password: "", role: u.role, site: u.site, status: u.status })
+  }
+
+  const save = () => {
+    if (!form) return
+    if (form.name.trim().length < 3) return setError("Name is required")
+    if (!/^\S+@\S+\.\S+$/.test(form.email)) return setError("Enter a valid email")
+    if (!form.id && form.password.length < 6) return setError("Password must be at least 6 characters")
+    if (form.id) {
+      const clash = db.users.some((u) => u.id !== form.id && u.email.toLowerCase() === form.email.toLowerCase())
+      if (clash) return setError("Another user already uses this email")
+      const patch: Partial<User> = { name: form.name.trim(), email: form.email.trim(), role: form.role, site: form.site, status: form.status }
+      if (form.password) patch.password = form.password
+      updateUser(form.id, patch)
+      toast.success("User updated")
+    } else {
+      const res = addUser({ name: form.name.trim(), email: form.email.trim(), password: form.password, role: form.role, site: form.site, status: form.status })
+      if (!res.ok) return setError(res.error!)
+      toast.success(`Account created – ${form.email} can now sign in`)
     }
-  }, [router])
-
-  const activeUsers = USERS.filter((u) => u.status === "active").length
-  const inactiveUsers = USERS.filter((u) => u.status === "inactive").length
+    setForm(null)
+  }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/admin">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
-
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-3">
-            <Users className="h-8 w-8 text-primary" />
-            <h1 className="text-3xl font-bold">User Management</h1>
-          </div>
-          <Button>
-            <Plus className="h-4 w-4 mr-2" />
-            Add User
+    <div>
+      <PageHeader
+        title="User Management"
+        description="Create, edit, suspend and remove study accounts"
+        icon={Users}
+        actions={
+          <Button onClick={openNew}>
+            <UserPlus className="h-4 w-4 mr-2" /> Add user
           </Button>
-        </div>
-        <p className="text-muted-foreground mb-8">Add, edit, and manage user accounts</p>
+        }
+      />
 
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-primary">{USERS.length}</div>
-              <div className="text-sm text-muted-foreground">Total Users</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-primary">{activeUsers}</div>
-              <div className="text-sm text-muted-foreground">Active Users</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-primary">{inactiveUsers}</div>
-              <div className="text-sm text-muted-foreground">Inactive Users</div>
-            </CardContent>
-          </Card>
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+        <StatCard label="Total users" value={db.users.length} />
+        {(["doctor", "radiologist", "data-entry", "analyst"] as Role[]).map((r) => (
+          <StatCard key={r} label={ROLE_LABELS[r]} value={db.users.filter((u) => u.role === r).length} />
+        ))}
+      </div>
 
-        {/* Users List */}
-        <Card>
-          <CardHeader>
-            <CardTitle>All Users</CardTitle>
-            <CardDescription>Manage system user accounts and permissions</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {USERS.map((user) => (
-                <div key={user.id} className="flex items-center justify-between p-4 border rounded-lg">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-1">
-                      <div className="font-semibold">{user.name}</div>
-                      <Badge variant={user.status === "active" ? "default" : "secondary"}>
-                        {user.status === "active" ? "Active" : "Inactive"}
-                      </Badge>
-                      <Badge variant="outline">{user.role}</Badge>
+      <Card>
+        <CardHeader>
+          <CardTitle>Accounts</CardTitle>
+          <CardDescription>
+            {db.users.filter((u) => u.status === "active").length} active · {db.users.filter((u) => u.status === "suspended").length} suspended
+          </CardDescription>
+          <div className="flex flex-col gap-2 md:flex-row pt-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input className="pl-10" placeholder="Search name, email or site…" value={q} onChange={(e) => setQ(e.target.value)} />
+            </div>
+            <Select value={roleFilter} onValueChange={setRoleFilter}>
+              <SelectTrigger className="md:w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All roles</SelectItem>
+                {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {ROLE_LABELS[r]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Site</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Last login</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {users.map((u) => (
+                <TableRow key={u.id}>
+                  <TableCell>
+                    <div className="font-medium">
+                      {u.name} {u.id === me?.id && <span className="text-xs text-muted-foreground">(you)</span>}
                     </div>
-                    <div className="text-sm text-muted-foreground">
-                      {user.email} • {user.institution}
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-1">Last login: {user.lastLogin}</div>
+                    <div className="text-xs text-muted-foreground">{u.email}</div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{ROLE_LABELS[u.role]}</Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">{u.site}</TableCell>
+                  <TableCell>
+                    <Badge variant={u.status === "active" ? "default" : "destructive"}>{u.status}</Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">{u.lastLogin ? fromNow(u.lastLogin) : "never"}</TableCell>
+                  <TableCell className="text-right whitespace-nowrap">
+                    <Button size="icon" variant="ghost" aria-label="Edit" onClick={() => openEdit(u)}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={u.status === "active" ? "Suspend" : "Activate"}
+                      disabled={u.id === me?.id}
+                      onClick={() => {
+                        const next = u.status === "active" ? "suspended" : "active"
+                        updateUser(u.id, { status: next })
+                        toast.success(`${u.name} ${next === "active" ? "re-activated" : "suspended"}`)
+                      }}
+                    >
+                      {u.status === "active" ? <Ban className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label="Reset password"
+                      onClick={() => {
+                        const pw = `reset${Math.floor(1000 + Math.random() * 9000)}`
+                        updateUser(u.id, { password: pw })
+                        toast.success(`Temporary password for ${u.email}: ${pw}`, { duration: 10000 })
+                      }}
+                    >
+                      <KeyRound className="h-4 w-4" />
+                    </Button>
+                    <Button size="icon" variant="ghost" aria-label="Delete" disabled={u.id === me?.id} onClick={() => setDeleting(u)}>
+                      <Trash2 className="h-4 w-4 text-red-600" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!form} onOpenChange={(o) => !o && setForm(null)}>
+        <DialogContent>
+          {form && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{form.id ? "Edit user" : "Add user"}</DialogTitle>
+                <DialogDescription>{form.id ? "Leave the password blank to keep the current one." : "The new account can sign in immediately."}</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                {error && <p className="rounded bg-red-50 p-2 text-sm text-red-700">{error}</p>}
+                <div className="space-y-2">
+                  <Label htmlFor="u-name">Full name</Label>
+                  <Input id="u-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="u-email">Email</Label>
+                  <Input id="u-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="u-pw">{form.id ? "New password (optional)" : "Password"}</Label>
+                  <Input id="u-pw" type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Role</Label>
+                    <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v as Role })} disabled={form.id === me?.id}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
+                          <SelectItem key={r} value={r}>
+                            {ROLE_LABELS[r]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="outline">
-                      <Edit className="h-4 w-4 mr-2" />
-                      Edit
-                    </Button>
-                    <Button size="sm" variant="outline">
-                      <Shield className="h-4 w-4 mr-2" />
-                      Permissions
-                    </Button>
-                    <Button size="sm" variant="outline">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as User["status"] })} disabled={form.id === me?.id}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="suspended">Suspended</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+                <div className="space-y-2">
+                  <Label>Site</Label>
+                  <Select value={form.site} onValueChange={(v) => setForm({ ...form, site: v })}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {db.sites.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {s}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setForm(null)}>
+                  Cancel
+                </Button>
+                <Button onClick={save}>{form.id ? "Save" : "Create account"}</Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>The account {deleting?.email} will be removed permanently. Their past reviews stay in the record.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => {
+                if (deleting) {
+                  deleteUser(deleting.id)
+                  toast.success("User deleted")
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

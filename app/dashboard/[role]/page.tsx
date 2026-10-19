@@ -1,306 +1,192 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useRouter, useParams } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import Link from "next/link"
+import { useParams } from "next/navigation"
+import { ArrowRight, Brain } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import Link from "next/link"
-import {
-  Brain,
-  FileText,
-  Users,
-  BarChart3,
-  Settings,
-  LogOut,
-  Stethoscope,
-  ScanLine,
-  Database,
-  TrendingUp,
-  Shield,
-  CheckCircle,
-  Edit3,
-  GitCompare,
-  LineChart,
-} from "lucide-react"
+import { PageHeader } from "@/components/dashboard-shell"
+import { StatCard } from "@/components/common"
+import { useDB, useStore } from "@/lib/store"
+import { isRole, ROLE_CONFIG } from "@/lib/roles"
+import { adjudicated, confusion, fromNow, pct, scores } from "@/lib/metrics"
+import type { DB, Role } from "@/lib/types"
 
-const ROLE_CONFIG = {
-  doctor: {
-    title: "Expert Validation Dashboard",
-    icon: Stethoscope,
-    description:
-      "This dashboard enables expert reviewers to evaluate and validate AI-generated stroke predictions as part of the ongoing research study.",
-    welcomeTitle: "Welcome to the Stroke AI Research Platform — Expert Validation Dashboard",
-    features: [
-      {
-        icon: CheckCircle,
-        title: "AI Predictions Review",
-        description:
-          "Review AI-generated classifications of ischemic, hemorrhagic, or normal scans with confidence scores and lesion heatmaps. Mark predictions as correct, incorrect, or uncertain.",
-        slug: "ai-predictions-review",
-      },
-      {
-        icon: Edit3,
-        title: "Annotate and Correct",
-        description:
-          "Access MRI scans to edit or draw lesion boundaries, correct AI annotations using overlays from U-Net or nnU-Net, and submit adjustments to support model retraining.",
-        slug: "annotate-correct",
-      },
-      {
-        icon: GitCompare,
-        title: "Model Comparison",
-        description:
-          "Compare predictions across ResNet50, EfficientNet, and DenseNet models for the same MRI scan, showing probability scores, overlap metrics, and localization accuracy.",
-        slug: "model-comparison",
-      },
-      {
-        icon: LineChart,
-        title: "Performance Insights",
-        description:
-          "Display aggregated model performance metrics such as accuracy, sensitivity, specificity, and false-positive/false-negative distributions across datasets, age groups, or scan modalities.",
-        slug: "performance-insights",
-      },
-    ],
-    stats: [
-      { value: "1,247", label: "Cases Reviewed" },
-      { value: "94.2%", label: "Model Accuracy" },
-      { value: "856", label: "Feedback Submitted" },
-      { value: "8", label: "Datasets Involved" },
-    ],
-  },
-  radiologist: {
-    title: "Radiologist Dashboard",
-    icon: ScanLine,
-    description: "Analyze MRI scans and validate AI predictions",
-    features: [
-      { icon: Brain, title: "MRI Analysis", description: "Review and annotate MRI scan images", slug: "mri-analysis" },
-      {
-        icon: FileText,
-        title: "AI Predictions",
-        description: "Validate AI-generated stroke detections",
-        slug: "ai-predictions",
-      },
-      {
-        icon: BarChart3,
-        title: "Accuracy Metrics",
-        description: "Monitor AI system performance",
-        slug: "accuracy-metrics",
-      },
-      { icon: Users, title: "Case Reviews", description: "Collaborate on complex cases", slug: "case-reviews" },
-    ],
-    stats: [
-      { value: "1,247", label: "Total Cases" },
-      { value: "94.2%", label: "AI Accuracy" },
-      { value: "23", label: "Active Users" },
-      { value: "8", label: "Institutions" },
-    ],
-  },
-  "data-entry": {
-    title: "Data Entry Dashboard",
-    icon: Database,
-    description: "Input and manage patient data and scan metadata",
-    features: [
-      {
-        icon: FileText,
-        title: "Data Entry Forms",
-        description: "Input patient information and scan data",
-        slug: "data-entry-forms",
-      },
-      {
-        icon: Database,
-        title: "Database Management",
-        description: "Organize and update records",
-        slug: "database-management",
-      },
-      { icon: Brain, title: "Scan Upload", description: "Upload MRI images to the system", slug: "scan-upload" },
-      {
-        icon: BarChart3,
-        title: "Entry Statistics",
-        description: "Track data entry progress",
-        slug: "entry-statistics",
-      },
-    ],
-    stats: [
-      { value: "1,247", label: "Total Cases" },
-      { value: "94.2%", label: "AI Accuracy" },
-      { value: "23", label: "Active Users" },
-      { value: "8", label: "Institutions" },
-    ],
-  },
-  analyst: {
-    title: "Analyst Dashboard",
-    icon: TrendingUp,
-    description: "Analyze research data and generate insights",
-    features: [
-      {
-        icon: BarChart3,
-        title: "Statistical Analysis",
-        description: "Perform data analysis and modeling",
-        slug: "statistical-analysis",
-      },
-      {
-        icon: Brain,
-        title: "AI Performance",
-        description: "Evaluate model accuracy and metrics",
-        slug: "ai-performance",
-      },
-      {
-        icon: FileText,
-        title: "Research Reports",
-        description: "Generate study findings and reports",
-        slug: "research-reports",
-      },
-      {
-        icon: TrendingUp,
-        title: "Trend Analysis",
-        description: "Identify patterns in stroke data",
-        slug: "trend-analysis",
-      },
-    ],
-    stats: [
-      { value: "1,247", label: "Total Cases" },
-      { value: "94.2%", label: "AI Accuracy" },
-      { value: "23", label: "Active Users" },
-      { value: "8", label: "Institutions" },
-    ],
-  },
-  admin: {
-    title: "Administrator Dashboard",
-    icon: Shield,
-    description: "Manage system settings and user access",
-    features: [
-      {
-        icon: Users,
-        title: "User Management",
-        description: "Add, edit, and manage user accounts",
-        slug: "user-management",
-      },
-      { icon: Settings, title: "System Settings", description: "Configure system parameters", slug: "system-settings" },
-      {
-        icon: Shield,
-        title: "Security & Access",
-        description: "Manage permissions and security",
-        slug: "security-access",
-      },
-      {
-        icon: BarChart3,
-        title: "System Analytics",
-        description: "Monitor overall system usage",
-        slug: "system-analytics",
-      },
-    ],
-    stats: [
-      { value: "1,247", label: "Total Cases" },
-      { value: "94.2%", label: "AI Accuracy" },
-      { value: "23", label: "Active Users" },
-      { value: "8", label: "Institutions" },
-    ],
-  },
+type Todo = { label: string; count: number; href: string }
+
+function roleSummary(role: Role, db: DB, userName: string): { stats: { label: string; value: string | number }[]; todos: Todo[] } {
+  const s = scores(confusion(db.scans))
+  const by = (st: string) => db.scans.filter((x) => x.status === st).length
+  const today = new Date().toDateString()
+  switch (role) {
+    case "doctor":
+      return {
+        stats: [
+          { label: "Cases validated", value: by("validated") },
+          { label: "Model accuracy (adjudicated)", value: pct(s.accuracy) },
+          { label: "My validations", value: db.scans.filter((x) => x.expertValidation?.reviewer === userName).length },
+          { label: "Sites contributing", value: new Set(db.patients.map((p) => p.site)).size },
+        ],
+        todos: [
+          { label: "Cases awaiting your validation", count: by("pending-validation"), href: "/dashboard/doctor/ai-predictions-review" },
+          {
+            label: "Discharged patients missing 90-day mRS",
+            count: db.patients.filter((p) => p.status === "Discharged" && p.mrs90 === undefined).length,
+            href: "/dashboard/doctor/treatment-outcomes",
+          },
+        ],
+      }
+    case "radiologist":
+      return {
+        stats: [
+          { label: "Reading queue", value: by("pending-radiologist") },
+          { label: "AI sensitivity", value: pct(s.sensitivity) },
+          { label: "My reads", value: db.scans.filter((x) => x.radiologistReview?.reviewer === userName).length },
+          { label: "Open case discussions", value: db.cases.filter((c) => c.status === "open").length },
+        ],
+        todos: [
+          { label: "Studies awaiting your read", count: by("pending-radiologist"), href: "/dashboard/radiologist/ai-predictions" },
+          { label: "Open case discussions", count: db.cases.filter((c) => c.status === "open").length, href: "/dashboard/radiologist/case-reviews" },
+          { label: "Studies still in AI processing", count: by("processing"), href: "/dashboard/radiologist/mri-analysis" },
+        ],
+      }
+    case "data-entry":
+      return {
+        stats: [
+          { label: "Patients enrolled", value: db.patients.length },
+          { label: "MRI studies", value: db.scans.length },
+          { label: "Entered today", value: db.patients.filter((p) => new Date(p.createdAt).toDateString() === today).length },
+          { label: "Sites", value: db.sites.length },
+        ],
+        todos: [
+          {
+            label: "Patients without any MRI uploaded",
+            count: db.patients.filter((p) => !db.scans.some((s) => s.patientId === p.id)).length,
+            href: "/dashboard/data-entry/scan-upload",
+          },
+          {
+            label: "Records missing treatment data",
+            count: db.patients.filter((p) => p.status !== "Admitted" && !p.treatment).length,
+            href: "/dashboard/data-entry/database-management",
+          },
+        ],
+      }
+    case "analyst":
+      return {
+        stats: [
+          { label: "Adjudicated scans", value: adjudicated(db.scans).length },
+          { label: "Accuracy", value: pct(s.accuracy) },
+          { label: "F1 score", value: s.f1.toFixed(3) },
+          { label: "Reports", value: db.reports.length },
+        ],
+        todos: [
+          { label: "Draft reports", count: db.reports.filter((r) => r.status === "draft").length, href: "/dashboard/analyst/research-reports" },
+        ],
+      }
+    case "admin":
+      return {
+        stats: [
+          { label: "Users", value: db.users.length },
+          { label: "Active users", value: db.users.filter((u) => u.status === "active").length },
+          { label: "Audit events (24 h)", value: db.audit.filter((a) => Date.now() - new Date(a.at).getTime() < 86_400_000).length },
+          { label: "Unread inquiries", value: db.inquiries.filter((i) => !i.read).length },
+        ],
+        todos: [
+          { label: "Unread contact inquiries", count: db.inquiries.filter((i) => !i.read).length, href: "/dashboard/admin/system-analytics" },
+          { label: "Suspended accounts", count: db.users.filter((u) => u.status === "suspended").length, href: "/dashboard/admin/user-management" },
+          {
+            label: "Security warnings (7 days)",
+            count: db.audit.filter((a) => a.severity !== "info" && Date.now() - new Date(a.at).getTime() < 7 * 86_400_000).length,
+            href: "/dashboard/admin/security-access",
+          },
+        ],
+      }
+  }
 }
 
 export default function DashboardPage() {
-  const router = useRouter()
   const params = useParams()
   const role = params.role as string
-  const [userEmail, setUserEmail] = useState("")
+  const db = useDB()
+  const { user } = useStore()
+  if (!isRole(role) || !user) return null
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    const storedEmail = sessionStorage.getItem("userEmail")
-
-    if (!storedRole || storedRole !== role) {
-      router.push("/login")
-    } else {
-      setUserEmail(storedEmail || "")
-    }
-  }, [role, router])
-
-  const handleLogout = () => {
-    sessionStorage.removeItem("userRole")
-    sessionStorage.removeItem("userEmail")
-    router.push("/login")
-  }
-
-  const config = ROLE_CONFIG[role as keyof typeof ROLE_CONFIG]
-
-  if (!config) {
-    return null
-  }
-
-  const IconComponent = config.icon
+  const config = ROLE_CONFIG[role]
+  const { stats, todos } = roleSummary(role, db, user.name)
+  const myActivity = db.audit.filter((a) => a.user === user.name).slice(0, 6)
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader title={config.title} description={config.description} icon={config.icon} />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <IconComponent className="h-8 w-8 text-primary" />
-              <h1 className="text-3xl font-bold">{config.title}</h1>
-            </div>
-            <p className="text-muted-foreground">{config.description}</p>
-            <p className="text-sm text-muted-foreground mt-1">Logged in as: {userEmail}</p>
-          </div>
-          <Button variant="outline" onClick={handleLogout}>
-            <LogOut className="h-4 w-4 mr-2" />
-            Logout
-          </Button>
-        </div>
-
-        {/* Welcome Card */}
-        <Card className="mb-8 bg-primary/5 border-primary/20">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-4">
-              <Brain className="h-12 w-12 text-primary flex-shrink-0" />
-              <div>
-                <h2 className="text-xl font-semibold mb-2">
-                  {config.welcomeTitle || "Welcome to the Stroke AI Research Platform"}
-                </h2>
-                <p className="text-muted-foreground leading-relaxed">
-                  {role === "doctor"
-                    ? config.description
-                    : "This is your role-specific dashboard for the Computer-aided Detection and Classification of Ischemic Strokes study. Access your tools and resources below."}
-                </p>
+      <Card className="mb-8 bg-primary/5 border-primary/20">
+        <CardContent className="pt-6">
+          <div className="flex items-start gap-4">
+            <Brain className="h-10 w-10 text-primary flex-shrink-0" />
+            <div className="flex-1">
+              <h2 className="text-lg font-semibold mb-1">Welcome back, {user.name}</h2>
+              <p className="text-muted-foreground text-sm">
+                {db.settings.studyName} · {user.site}
+              </p>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {todos.map((t) => (
+                  <Link key={t.label} href={t.href} className="flex items-center justify-between rounded-lg border bg-background p-3 text-sm hover:border-primary transition-colors">
+                    <span>{t.label}</span>
+                    <span className={`ml-3 rounded-full px-2.5 py-0.5 text-xs font-semibold ${t.count ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                      {t.count}
+                    </span>
+                  </Link>
+                ))}
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </CardContent>
+      </Card>
 
-        {/* Feature Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        {stats.map((s) => (
+          <StatCard key={s.label} label={s.label} value={s.value} />
+        ))}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
         <div className="grid md:grid-cols-2 gap-6">
-          {config.features.map((feature, index) => {
-            const FeatureIcon = feature.icon
-            return (
-              <Card key={index} className="hover:shadow-lg transition-shadow">
-                <CardHeader>
-                  <FeatureIcon className="h-10 w-10 text-primary mb-2" />
-                  <CardTitle>{feature.title}</CardTitle>
-                  <CardDescription>{feature.description}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Button className="w-full" asChild>
-                    <Link href={`/dashboard/${role}/${feature.slug}`}>Access {feature.title}</Link>
-                  </Button>
-                </CardContent>
-              </Card>
-            )
-          })}
-        </div>
-
-        {/* Quick Stats */}
-        <div className="grid md:grid-cols-4 gap-4 mt-8">
-          {config.stats.map((stat, index) => (
-            <Card key={index}>
-              <CardContent className="pt-6">
-                <div className="text-2xl font-bold text-primary">{stat.value}</div>
-                <div className="text-sm text-muted-foreground">{stat.label}</div>
+          {config.features.map((feature) => (
+            <Card key={feature.slug} className="hover:shadow-lg transition-shadow flex flex-col">
+              <CardHeader className="flex-1">
+                <feature.icon className="h-9 w-9 text-primary mb-2" />
+                <CardTitle>{feature.title}</CardTitle>
+                <CardDescription>{feature.description}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button className="w-full" asChild>
+                  <Link href={`/dashboard/${role}/${feature.slug}`}>
+                    Open {feature.title} <ArrowRight className="h-4 w-4 ml-2" />
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
           ))}
         </div>
+        <Card className="h-fit">
+          <CardHeader>
+            <CardTitle className="text-base">Your recent activity</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {myActivity.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No activity yet.</p>
+            ) : (
+              <ul className="space-y-3">
+                {myActivity.map((a) => (
+                  <li key={a.id} className="text-sm">
+                    <div>{a.detail}</div>
+                    <div className="text-xs text-muted-foreground">{fromNow(a.at)}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   )

@@ -1,160 +1,129 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
-import { Button } from "@/components/ui/button"
+import { useMemo } from "react"
+import { format, startOfWeek, subWeeks } from "date-fns"
+import { BarChart3 } from "lucide-react"
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import Link from "next/link"
-import { ArrowLeft, BarChart3, TrendingUp } from "lucide-react"
+import { PageHeader } from "@/components/dashboard-shell"
+import { CHART_COLORS, StatCard } from "@/components/common"
+import { ConfusionMatrix, GroupMetricChart, MetricTiles } from "@/components/charts"
+import { confusion, pct, scores } from "@/lib/metrics"
+import { useDB } from "@/lib/store"
+import type { Scan } from "@/lib/types"
 
-const METRICS_DATA = {
-  overall: {
-    accuracy: 94.2,
-    sensitivity: 92.8,
-    specificity: 95.6,
-    precision: 91.4,
-    f1Score: 92.1,
-  },
-  byStrokeType: [
-    { type: "Acute Ischemic", accuracy: 95.3, cases: 342, truePositives: 326, falsePositives: 8, falseNegatives: 8 },
-    { type: "Chronic Infarct", accuracy: 93.1, cases: 198, truePositives: 184, falsePositives: 12, falseNegatives: 2 },
-    { type: "Subacute Infarct", accuracy: 89.7, cases: 124, truePositives: 111, falsePositives: 9, falseNegatives: 4 },
-    { type: "Hemorrhagic", accuracy: 96.8, cases: 87, truePositives: 84, falsePositives: 2, falseNegatives: 1 },
-  ],
-  monthlyTrend: [
-    { month: "Aug 2023", accuracy: 91.2 },
-    { month: "Sep 2023", accuracy: 92.1 },
-    { month: "Oct 2023", accuracy: 92.8 },
-    { month: "Nov 2023", accuracy: 93.4 },
-    { month: "Dec 2023", accuracy: 93.9 },
-    { month: "Jan 2024", accuracy: 94.2 },
-  ],
-}
+const BANDS: [string, number, number][] = [
+  ["50–70%", 0.5, 0.7],
+  ["70–85%", 0.7, 0.85],
+  ["85–95%", 0.85, 0.95],
+  ["95–100%", 0.95, 1.01],
+]
 
 export default function AccuracyMetricsPage() {
-  const router = useRouter()
+  const db = useDB()
+  // AI vs radiologist read (the radiologist's own reference standard)
+  const reviewed = useMemo(
+    () =>
+      db.scans
+        .filter((s) => s.ai && s.radiologistReview)
+        .map((s) => ({ ...s, expertValidation: undefined }) as Scan),
+    [db.scans],
+  )
+  const c = confusion(reviewed)
+  const s = scores(c)
+  const agree = reviewed.filter((x) => x.ai!.label === x.radiologistReview!.finalLabel)
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "radiologist") {
-      router.push("/login")
+  const bySequence = ["DWI", "ADC", "T2", "T1", "MRA", "FLAIR"]
+    .map((seq) => {
+      const l = reviewed.filter((x) => x.sequence === seq)
+      return { name: seq, value: scores(confusion(l)).accuracy, n: l.length }
+    })
+    .filter((d) => d.n > 0)
+
+  const calibration = BANDS.map(([name, lo, hi]) => {
+    const l = reviewed.filter((x) => x.ai!.confidence >= lo && x.ai!.confidence < hi)
+    return { name, value: l.length ? l.filter((x) => x.ai!.label === x.radiologistReview!.finalLabel).length / l.length : 0, n: l.length }
+  })
+
+  const weekly = Array.from({ length: 12 }, (_, i) => {
+    const start = startOfWeek(subWeeks(new Date(), 11 - i))
+    const end = new Date(start.getTime() + 7 * 86_400_000)
+    const l = reviewed.filter((x) => {
+      const t = new Date(x.radiologistReview!.at)
+      return t >= start && t < end
+    })
+    return {
+      week: format(start, "d MMM"),
+      agreement: l.length ? Math.round((l.filter((x) => x.ai!.label === x.radiologistReview!.finalLabel).length / l.length) * 1000) / 10 : null,
+      reads: l.length,
     }
-  }, [router])
+  })
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader title="Accuracy Metrics" description="AI performance measured against radiologist reads (updates as you review)" icon={BarChart3} />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/radiologist">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Radiologist reads" value={reviewed.length} />
+        <StatCard label="AI–radiologist agreement" value={pct(reviewed.length ? agree.length / reviewed.length : 0)} tone="green" />
+        <StatCard label="Sensitivity" value={pct(s.sensitivity)} />
+        <StatCard label="Specificity" value={pct(s.specificity)} />
+      </div>
 
-        <div className="flex items-center gap-3 mb-2">
-          <BarChart3 className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">Accuracy Metrics</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Monitor AI system performance</p>
-
-        {/* Overall Metrics */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Overall Performance Metrics</CardTitle>
-            <CardDescription>System-wide AI accuracy statistics</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid md:grid-cols-5 gap-4">
-              <div className="text-center">
-                <div className="text-3xl font-bold text-primary">{METRICS_DATA.overall.accuracy}%</div>
-                <div className="text-sm text-muted-foreground mt-1">Accuracy</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-primary">{METRICS_DATA.overall.sensitivity}%</div>
-                <div className="text-sm text-muted-foreground mt-1">Sensitivity</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-primary">{METRICS_DATA.overall.specificity}%</div>
-                <div className="text-sm text-muted-foreground mt-1">Specificity</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-primary">{METRICS_DATA.overall.precision}%</div>
-                <div className="text-sm text-muted-foreground mt-1">Precision</div>
-              </div>
-              <div className="text-center">
-                <div className="text-3xl font-bold text-primary">{METRICS_DATA.overall.f1Score}%</div>
-                <div className="text-sm text-muted-foreground mt-1">F1 Score</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* By Stroke Type */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Performance by Stroke Type</CardTitle>
-            <CardDescription>Breakdown of accuracy metrics by classification</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {METRICS_DATA.byStrokeType.map((item) => (
-                <div key={item.type} className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="font-semibold">{item.type}</div>
-                    <div className="text-2xl font-bold text-primary">{item.accuracy}%</div>
-                  </div>
-                  <div className="grid grid-cols-4 gap-4 text-sm">
-                    <div>
-                      <div className="text-muted-foreground">Total Cases</div>
-                      <div className="font-medium">{item.cases}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">True Positives</div>
-                      <div className="font-medium text-green-600">{item.truePositives}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">False Positives</div>
-                      <div className="font-medium text-orange-600">{item.falsePositives}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">False Negatives</div>
-                      <div className="font-medium text-red-600">{item.falseNegatives}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Monthly Trend */}
+      <div className="grid gap-6 lg:grid-cols-2 mb-6">
         <Card>
           <CardHeader>
-            <CardTitle>Accuracy Trend</CardTitle>
-            <CardDescription>6-month performance improvement</CardDescription>
+            <CardTitle>Confusion matrix</CardTitle>
+            <CardDescription>AI prediction vs. radiologist final read</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {METRICS_DATA.monthlyTrend.map((item, index) => (
-                <div key={item.month} className="flex items-center gap-4">
-                  <div className="w-24 text-sm text-muted-foreground">{item.month}</div>
-                  <div className="flex-1">
-                    <div className="h-8 bg-primary/10 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-primary flex items-center justify-end pr-3 text-sm font-medium text-white"
-                        style={{ width: `${item.accuracy}%` }}
-                      >
-                        {item.accuracy}%
-                      </div>
-                    </div>
-                  </div>
-                  {index === METRICS_DATA.monthlyTrend.length - 1 && <TrendingUp className="h-5 w-5 text-green-500" />}
-                </div>
-              ))}
-            </div>
+            <ConfusionMatrix c={c} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Summary metrics</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <MetricTiles c={c} />
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Accuracy by sequence</CardTitle>
+            <CardDescription>Grey bars have fewer than 3 reads</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <GroupMetricChart data={bySequence} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Calibration</CardTitle>
+            <CardDescription>Observed accuracy per AI confidence band</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <GroupMetricChart data={calibration} color={CHART_COLORS[2]} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Weekly agreement</CardTitle>
+            <CardDescription>Last 12 weeks</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[260px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={weekly}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="week" fontSize={10} />
+                <YAxis domain={[50, 100]} fontSize={11} unit="%" />
+                <Tooltip formatter={(v: number, n: string) => (n === "agreement" ? [`${v}%`, "Agreement"] : [v, n])} />
+                <Line type="monotone" dataKey="agreement" stroke={CHART_COLORS[0]} strokeWidth={2} connectNulls dot />
+              </LineChart>
+            </ResponsiveContainer>
           </CardContent>
         </Card>
       </div>

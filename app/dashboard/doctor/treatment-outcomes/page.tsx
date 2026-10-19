@@ -1,241 +1,298 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
-import Link from "next/link"
-import { Navigation } from "@/components/navigation"
+import { useMemo, useState } from "react"
+import { HeartPulse } from "lucide-react"
+import { toast } from "sonner"
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { TrendingUp, TrendingDown, Minus, Activity } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { PageHeader } from "@/components/dashboard-shell"
+import { CHART_COLORS, StatCard } from "@/components/common"
+import { TREATMENT_OPTIONS } from "@/components/patient-form"
+import { useDB, useStore } from "@/lib/store"
+import { fmtDate, pct } from "@/lib/metrics"
+import type { Patient, Treatment } from "@/lib/types"
 
-const TREATMENT_OUTCOMES = [
-  {
-    id: "TO-2024-001",
-    patientName: "John Anderson",
-    patientId: "PC-2024-001",
-    treatmentType: "Thrombolysis (tPA)",
-    startDate: "2024-01-15",
-    duration: "3 days",
-    nihssAdmission: 12,
-    nihssCurrent: 6,
-    improvement: "50%",
-    status: "Improving",
-    complications: "None",
-    nextReview: "2024-01-18",
-  },
-  {
-    id: "TO-2024-002",
-    patientName: "Maria Garcia",
-    patientId: "PC-2024-002",
-    treatmentType: "Antiplatelet Therapy",
-    startDate: "2024-01-14",
-    duration: "4 days",
-    nihssAdmission: 4,
-    nihssCurrent: 2,
-    improvement: "50%",
-    status: "Improving",
-    complications: "None",
-    nextReview: "2024-01-17",
-  },
-  {
-    id: "TO-2024-003",
-    patientName: "Robert Chen",
-    patientId: "PC-2024-003",
-    treatmentType: "Mechanical Thrombectomy",
-    startDate: "2024-01-13",
-    duration: "5 days",
-    nihssAdmission: 18,
-    nihssCurrent: 16,
-    improvement: "11%",
-    status: "Stable",
-    complications: "Minor bleeding",
-    nextReview: "2024-01-16",
-  },
-  {
-    id: "TO-2024-004",
-    patientName: "Sarah Williams",
-    patientId: "PC-2024-004",
-    treatmentType: "Anticoagulation",
-    startDate: "2024-01-12",
-    duration: "6 days",
-    nihssAdmission: 5,
-    nihssCurrent: 1,
-    improvement: "80%",
-    status: "Excellent Recovery",
-    complications: "None",
-    nextReview: "2024-01-15",
-  },
-]
+const MRS_LABELS = ["0 – No symptoms", "1 – No significant disability", "2 – Slight disability", "3 – Moderate disability", "4 – Moderately severe", "5 – Severe disability", "6 – Dead"]
 
 export default function TreatmentOutcomesPage() {
-  const router = useRouter()
-  const [userEmail, setUserEmail] = useState("")
+  const db = useDB()
+  const { updatePatient } = useStore()
+  const [editing, setEditing] = useState<Patient | null>(null)
+  const [form, setForm] = useState<{ treatment?: Treatment; nihssDischarge: string; mrs90: string; status: Patient["status"] }>({
+    nihssDischarge: "",
+    mrs90: "",
+    status: "Discharged",
+  })
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    const storedEmail = sessionStorage.getItem("userEmail")
-    if (!storedRole || storedRole !== "doctor") {
-      router.push("/login")
-    } else {
-      setUserEmail(storedEmail || "")
-    }
-  }, [router])
+  const treated = db.patients.filter((p) => p.treatment)
+  const withMrs = treated.filter((p) => p.mrs90 !== undefined)
 
-  const getStatusIcon = (status: string) => {
-    if (status.includes("Improving") || status.includes("Excellent")) {
-      return <TrendingUp className="h-4 w-4" />
-    }
-    if (status === "Stable") {
-      return <Minus className="h-4 w-4" />
-    }
-    return <TrendingDown className="h-4 w-4" />
+  const byTreatment = useMemo(
+    () =>
+      TREATMENT_OPTIONS.map((t) => {
+        const l = db.patients.filter((p) => p.treatment === t)
+        const m = l.filter((p) => p.mrs90 !== undefined)
+        const d = l.filter((p) => p.nihssDischarge !== undefined)
+        return {
+          name: t.replace(" (tPA)", "").replace("Antiplatelet / supportive", "Supportive"),
+          full: t,
+          n: l.length,
+          nihssAdm: l.length ? l.reduce((a, p) => a + p.nihssAdmission, 0) / l.length : 0,
+          nihssDis: d.length ? d.reduce((a, p) => a + (p.nihssDischarge ?? 0), 0) / d.length : 0,
+          good: m.length ? m.filter((p) => p.mrs90! <= 2).length / m.length : 0,
+          mortality: m.length ? m.filter((p) => p.mrs90 === 6).length / m.length : 0,
+          los: l.length ? l.reduce((a, p) => a + (p.lengthOfStayDays ?? 0), 0) / l.length : 0,
+          mrsN: m.length,
+        }
+      }),
+    [db.patients],
+  )
+
+  const mrsDist = TREATMENT_OPTIONS.map((t) => {
+    const row: Record<string, number | string> = { name: t.replace(" (tPA)", "").replace("Antiplatelet / supportive", "Supportive") }
+    const l = db.patients.filter((p) => p.treatment === t && p.mrs90 !== undefined)
+    for (let i = 0; i <= 6; i++) row[`mRS ${i}`] = l.length ? Math.round((l.filter((p) => p.mrs90 === i).length / l.length) * 100) : 0
+    return row
+  })
+
+  const missing = db.patients
+    .filter((p) => p.status !== "Admitted" && (p.mrs90 === undefined || !p.treatment))
+    .concat(db.patients.filter((p) => p.status === "Admitted" && Date.now() - new Date(p.admittedAt).getTime() > 5 * 86_400_000))
+    .filter((p, i, arr) => arr.findIndex((x) => x.id === p.id) === i)
+    .sort((a, b) => a.admittedAt.localeCompare(b.admittedAt))
+
+  const startEdit = (p: Patient) => {
+    setEditing(p)
+    setForm({
+      treatment: p.treatment,
+      nihssDischarge: p.nihssDischarge?.toString() ?? "",
+      mrs90: p.mrs90?.toString() ?? "",
+      status: p.status === "Admitted" ? "Discharged" : p.status,
+    })
   }
 
-  const getStatusVariant = (status: string) => {
-    if (status.includes("Excellent")) return "default"
-    if (status.includes("Improving")) return "secondary"
-    return "outline"
-  }
-
-  const getImprovementColor = (improvement: string) => {
-    const value = Number.parseInt(improvement)
-    if (value >= 50) return "text-green-600"
-    if (value >= 25) return "text-blue-600"
-    if (value >= 10) return "text-orange-600"
-    return "text-red-600"
+  const save = () => {
+    if (!editing) return
+    const mrs = form.mrs90 === "" ? undefined : Number(form.mrs90)
+    const nd = form.nihssDischarge === "" ? undefined : Number(form.nihssDischarge)
+    if (mrs !== undefined && !(mrs >= 0 && mrs <= 6)) return toast.error("mRS must be 0–6")
+    if (nd !== undefined && !(nd >= 0 && nd <= 42)) return toast.error("NIHSS must be 0–42")
+    updatePatient(editing.id, {
+      treatment: form.treatment,
+      nihssDischarge: nd,
+      mrs90: mrs,
+      status: mrs === 6 ? "Deceased" : mrs !== undefined ? "Follow-up" : form.status,
+    })
+    toast.success(`Outcome recorded for ${editing.id}`)
+    setEditing(null)
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold">Treatment Outcomes</h1>
-            <p className="text-muted-foreground">Track patient recovery and outcomes • Logged in as: {userEmail}</p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" asChild>
-              <Link href="/dashboard/doctor">Back to Dashboard</Link>
-            </Button>
-          </div>
-        </div>
+    <div>
+      <PageHeader title="Treatment Outcomes" description="Functional outcomes by treatment pathway" icon={HeartPulse} />
 
-        <div className="grid md:grid-cols-4 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2">
-                <Activity className="h-5 w-5 text-primary" />
-                <div>
-                  <div className="text-2xl font-bold text-primary">4</div>
-                  <div className="text-sm text-muted-foreground">Active Treatments</div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2">
-                <TrendingUp className="h-5 w-5 text-green-600" />
-                <div>
-                  <div className="text-2xl font-bold text-green-600">3</div>
-                  <div className="text-sm text-muted-foreground">Improving</div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2">
-                <Minus className="h-5 w-5 text-orange-600" />
-                <div>
-                  <div className="text-2xl font-bold text-orange-600">1</div>
-                  <div className="text-sm text-muted-foreground">Stable</div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-primary">47.8%</div>
-              <div className="text-sm text-muted-foreground">Avg Improvement</div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="space-y-4">
-          {TREATMENT_OUTCOMES.map((outcome) => (
-            <Card key={outcome.id} className="hover:shadow-md transition-shadow">
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <CardTitle className="text-xl">{outcome.patientName}</CardTitle>
-                      <Badge variant={getStatusVariant(outcome.status)}>
-                        <span className="flex items-center gap-1">
-                          {getStatusIcon(outcome.status)}
-                          {outcome.status}
-                        </span>
-                      </Badge>
-                    </div>
-                    <CardDescription>
-                      Outcome ID: {outcome.id} • Patient: {outcome.patientId}
-                    </CardDescription>
-                  </div>
-                  <Button size="sm">View Details</Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <div className="text-sm text-muted-foreground mb-1">Treatment Type</div>
-                      <div className="font-medium">{outcome.treatmentType}</div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-muted-foreground mb-1">Duration</div>
-                      <div className="font-medium">{outcome.duration}</div>
-                    </div>
-                  </div>
-
-                  <div className="grid md:grid-cols-4 gap-4 p-4 bg-muted/50 rounded-lg">
-                    <div>
-                      <div className="text-sm text-muted-foreground mb-1">NIHSS Admission</div>
-                      <div className="text-xl font-bold">{outcome.nihssAdmission}</div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-muted-foreground mb-1">NIHSS Current</div>
-                      <div className="text-xl font-bold">{outcome.nihssCurrent}</div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-muted-foreground mb-1">Improvement</div>
-                      <div className={`text-xl font-bold ${getImprovementColor(outcome.improvement)}`}>
-                        {outcome.improvement}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-muted-foreground mb-1">Complications</div>
-                      <div className="text-sm font-medium">{outcome.complications}</div>
-                    </div>
-                  </div>
-
-                  <div className="grid md:grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <div className="text-muted-foreground mb-1">Treatment Start</div>
-                      <div className="font-medium">{outcome.startDate}</div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground mb-1">Next Review</div>
-                      <div className="font-medium">{outcome.nextReview}</div>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Patients with treatment recorded" value={treated.length} />
+        <StatCard label="Good outcome (mRS 0–2)" value={pct(withMrs.length ? withMrs.filter((p) => p.mrs90! <= 2).length / withMrs.length : 0)} tone="green" />
+        <StatCard label="90-day mortality" value={pct(withMrs.length ? withMrs.filter((p) => p.mrs90 === 6).length / withMrs.length : 0)} tone="red" />
+        <StatCard label="Outcome data pending" value={missing.length} tone="orange" />
       </div>
+
+      <div className="grid gap-6 lg:grid-cols-2 mb-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>NIHSS: admission vs. discharge</CardTitle>
+            <CardDescription>Mean scores per treatment pathway (lower is better)</CardDescription>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={byTreatment}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" fontSize={11} />
+                <YAxis fontSize={11} />
+                <Tooltip formatter={(v: number) => v.toFixed(1)} />
+                <Legend />
+                <Bar dataKey="nihssAdm" name="Admission" fill={CHART_COLORS[1]} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="nihssDis" name="Discharge" fill={CHART_COLORS[2]} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>90-day mRS distribution</CardTitle>
+            <CardDescription>% of patients per mRS grade</CardDescription>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={mrsDist} layout="vertical" stackOffset="expand">
+                <XAxis type="number" hide />
+                <YAxis type="category" dataKey="name" width={110} fontSize={11} />
+                <Tooltip formatter={(v: number) => `${v}%`} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                {Array.from({ length: 7 }, (_, i) => (
+                  <Bar key={i} dataKey={`mRS ${i}`} stackId="a" fill={["#15803d", "#22c55e", "#86efac", "#fde047", "#fb923c", "#ef4444", "#1f2937"][i]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Outcomes summary</CardTitle>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Treatment</TableHead>
+                <TableHead>n</TableHead>
+                <TableHead>Mean NIHSS change</TableHead>
+                <TableHead>mRS 0–2</TableHead>
+                <TableHead>Mortality</TableHead>
+                <TableHead>Mean stay</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {byTreatment.map((t) => (
+                <TableRow key={t.full}>
+                  <TableCell className="font-medium">{t.full}</TableCell>
+                  <TableCell>{t.n}</TableCell>
+                  <TableCell className="text-emerald-700">{t.n ? `−${(t.nihssAdm - t.nihssDis).toFixed(1)}` : "—"}</TableCell>
+                  <TableCell>{t.mrsN ? pct(t.good) : "—"}</TableCell>
+                  <TableCell>{t.mrsN ? pct(t.mortality) : "—"}</TableCell>
+                  <TableCell>{t.n ? `${t.los.toFixed(1)} d` : "—"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Outcome data to complete ({missing.length})</CardTitle>
+          <CardDescription>Discharged patients without treatment or 90-day mRS, and long admissions</CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Patient</TableHead>
+                <TableHead>Admitted</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Treatment</TableHead>
+                <TableHead>mRS</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {missing.slice(0, 20).map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell>
+                    <div className="font-medium">{p.name}</div>
+                    <div className="text-xs text-muted-foreground">{p.id}</div>
+                  </TableCell>
+                  <TableCell className="text-sm">{fmtDate(p.admittedAt)}</TableCell>
+                  <TableCell>{p.status}</TableCell>
+                  <TableCell className="text-sm">{p.treatment ?? <span className="text-amber-600">missing</span>}</TableCell>
+                  <TableCell>{p.mrs90 ?? <span className="text-amber-600">missing</span>}</TableCell>
+                  <TableCell className="text-right">
+                    <Button size="sm" onClick={() => startEdit(p)}>
+                      Record outcome
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {missing.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-6">
+                    All outcome data is complete.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Record outcome – {editing?.name}</DialogTitle>
+            <DialogDescription>
+              {editing?.id} · NIHSS on admission {editing?.nihssAdmission}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Treatment</Label>
+              <Select value={form.treatment ?? ""} onValueChange={(v) => setForm((f) => ({ ...f, treatment: v as Treatment }))}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select treatment…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {TREATMENT_OPTIONS.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="nd">NIHSS at discharge</Label>
+                <Input id="nd" type="number" value={form.nihssDischarge} onChange={(e) => setForm((f) => ({ ...f, nihssDischarge: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v as Patient["status"] }))}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["Admitted", "Discharged", "Follow-up", "Deceased"].map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>90-day modified Rankin Scale</Label>
+              <Select value={form.mrs90} onValueChange={(v) => setForm((f) => ({ ...f, mrs90: v }))}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Not yet available" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MRS_LABELS.map((l, i) => (
+                    <SelectItem key={i} value={String(i)}>
+                      {l}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)}>
+              Cancel
+            </Button>
+            <Button onClick={save}>Save outcome</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

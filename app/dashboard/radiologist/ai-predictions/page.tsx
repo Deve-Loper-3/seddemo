@@ -1,216 +1,159 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import { useMemo, useState } from "react"
+import { AlertTriangle, CheckCircle, FileText, Inbox, XCircle } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import Link from "next/link"
-import { ArrowLeft, Brain, CheckCircle, XCircle, AlertTriangle } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { PageHeader } from "@/components/dashboard-shell"
+import { ConfidenceBar, EmptyState, LabelBadge, StatCard, StatusBadge, VerdictBadge } from "@/components/common"
+import { ReviewDialog } from "@/components/review-panel"
+import { ScanThumb } from "@/components/scan-viewer"
+import { useDB, useStore } from "@/lib/store"
+import { fromNow, patientMap } from "@/lib/metrics"
+import type { Scan } from "@/lib/types"
 
-const AI_PREDICTIONS = [
-  {
-    id: "PRED-2024-089",
-    patientId: "PT-8821",
-    scanId: "MRI-2024-001",
-    prediction: "Acute Ischemic Stroke",
-    confidence: 0.92,
-    region: "Left MCA Territory",
-    volume: "24.3 mL",
-    validated: null,
-    timestamp: "2024-01-15 09:23",
-  },
-  {
-    id: "PRED-2024-088",
-    patientId: "PT-8822",
-    scanId: "MRI-2024-002",
-    prediction: "Chronic Infarct",
-    confidence: 0.88,
-    region: "Right Frontal Lobe",
-    volume: "12.7 mL",
-    validated: "confirmed",
-    timestamp: "2024-01-15 08:45",
-  },
-  {
-    id: "PRED-2024-087",
-    patientId: "PT-8823",
-    scanId: "MRI-2024-003",
-    prediction: "Acute Ischemic Stroke",
-    confidence: 0.95,
-    region: "Bilateral Watershed",
-    volume: "31.8 mL",
-    validated: null,
-    timestamp: "2024-01-14 16:12",
-  },
-  {
-    id: "PRED-2024-086",
-    patientId: "PT-8824",
-    scanId: "MRI-2024-004",
-    prediction: "Subacute Infarct",
-    confidence: 0.79,
-    region: "Left Parietal",
-    volume: "8.4 mL",
-    validated: null,
-    timestamp: "2024-01-14 14:33",
-  },
-  {
-    id: "PRED-2024-085",
-    patientId: "PT-8825",
-    scanId: "MRI-2024-005",
-    prediction: "No Acute Findings",
-    confidence: 0.91,
-    region: "N/A",
-    volume: "0 mL",
-    validated: "confirmed",
-    timestamp: "2024-01-13 11:20",
-  },
-  {
-    id: "PRED-2024-084",
-    patientId: "PT-8826",
-    scanId: "MRI-2024-006",
-    prediction: "Acute Ischemic Stroke",
-    confidence: 0.67,
-    region: "Right Occipital",
-    volume: "5.2 mL",
-    validated: "rejected",
-    timestamp: "2024-01-13 10:05",
-  },
-]
+type Sort = "priority" | "confidence" | "oldest"
 
 export default function AIPredictionsPage() {
-  const router = useRouter()
+  const db = useDB()
+  const { user, submitRadiologistReview, can } = useStore()
+  const [tab, setTab] = useState<"queue" | "mine" | "all">("queue")
+  const [sort, setSort] = useState<Sort>("priority")
+  const [open, setOpen] = useState<Scan | null>(null)
+  const patients = useMemo(() => patientMap(db), [db])
+  const threshold = db.settings.aiConfidenceThreshold
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "radiologist") {
-      router.push("/login")
-    }
-  }, [router])
+  const list = useMemo(() => {
+    let l = db.scans.filter((s) => s.ai)
+    if (tab === "queue") l = l.filter((s) => s.status === "pending-radiologist")
+    if (tab === "mine") l = l.filter((s) => s.radiologistReview?.reviewer === user?.name)
+    const nihss = (s: Scan) => patients.get(s.patientId)?.nihssAdmission ?? 0
+    return l.sort((a, b) =>
+      sort === "confidence"
+        ? a.ai!.confidence - b.ai!.confidence
+        : sort === "oldest"
+          ? a.uploadedAt.localeCompare(b.uploadedAt)
+          : nihss(b) - nihss(a) || a.uploadedAt.localeCompare(b.uploadedAt),
+    )
+  }, [db.scans, tab, sort, user?.name, patients])
 
-  const pendingValidation = AI_PREDICTIONS.filter((p) => p.validated === null).length
-  const confirmed = AI_PREDICTIONS.filter((p) => p.validated === "confirmed").length
-  const rejected = AI_PREDICTIONS.filter((p) => p.validated === "rejected").length
+  const queue = db.scans.filter((s) => s.status === "pending-radiologist")
+  const lowConf = queue.filter((s) => s.ai && s.ai.confidence < threshold).length
+
+  const quickAccept = (s: Scan) => {
+    submitRadiologistReview(s.id, { verdict: "correct", finalLabel: s.ai!.label, notes: "" })
+    toast.success(`${s.id} accepted – sent for expert validation`)
+  }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader title="AI Predictions" description="Validate AI-generated stroke detections in your reading queue" icon={FileText} />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/radiologist">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
-
-        <div className="flex items-center gap-3 mb-2">
-          <Brain className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">AI Predictions</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Validate AI-generated stroke detections</p>
-
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{pendingValidation}</div>
-                  <div className="text-sm text-muted-foreground">Pending Validation</div>
-                </div>
-                <AlertTriangle className="h-8 w-8 text-orange-500" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{confirmed}</div>
-                  <div className="text-sm text-muted-foreground">Confirmed</div>
-                </div>
-                <CheckCircle className="h-8 w-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{rejected}</div>
-                  <div className="text-sm text-muted-foreground">Rejected</div>
-                </div>
-                <XCircle className="h-8 w-8 text-red-500" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Predictions List */}
-        <div className="space-y-4">
-          {AI_PREDICTIONS.map((pred) => (
-            <Card key={pred.id} className="hover:shadow-md transition-shadow">
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">{pred.id}</CardTitle>
-                    <CardDescription>
-                      Patient: {pred.patientId} • Scan: {pred.scanId}
-                    </CardDescription>
-                  </div>
-                  {pred.validated === null ? (
-                    <Badge variant="outline">Pending</Badge>
-                  ) : pred.validated === "confirmed" ? (
-                    <Badge className="bg-green-500">Confirmed</Badge>
-                  ) : (
-                    <Badge variant="destructive">Rejected</Badge>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid md:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <div className="text-sm font-medium mb-1">Prediction</div>
-                    <div className="text-sm text-muted-foreground">{pred.prediction}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Confidence</div>
-                    <div className="text-sm text-muted-foreground">
-                      {(pred.confidence * 100).toFixed(1)}%
-                      {pred.confidence < 0.8 && <span className="ml-2 text-orange-500 text-xs">(Low confidence)</span>}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Region</div>
-                    <div className="text-sm text-muted-foreground">{pred.region}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Estimated Volume</div>
-                    <div className="text-sm text-muted-foreground">{pred.volume}</div>
-                  </div>
-                  <div className="md:col-span-2">
-                    <div className="text-sm font-medium mb-1">Timestamp</div>
-                    <div className="text-sm text-muted-foreground">{pred.timestamp}</div>
-                  </div>
-                </div>
-                {pred.validated === null && (
-                  <div className="flex gap-2">
-                    <Button size="sm" className="flex-1 bg-green-500 hover:bg-green-600">
-                      <CheckCircle className="h-4 w-4 mr-2" />
-                      Confirm
-                    </Button>
-                    <Button size="sm" variant="destructive" className="flex-1">
-                      <XCircle className="h-4 w-4 mr-2" />
-                      Reject
-                    </Button>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="In reading queue" value={queue.length} icon={Inbox} tone="orange" />
+        <StatCard label={`Below ${Math.round(threshold * 100)}% confidence`} value={lowConf} icon={AlertTriangle} tone="red" />
+        <StatCard label="Reviewed by you" value={db.scans.filter((s) => s.radiologistReview?.reviewer === user?.name).length} icon={CheckCircle} tone="green" />
+        <StatCard
+          label="AI overruled (all reads)"
+          value={db.scans.filter((s) => s.radiologistReview?.verdict === "incorrect").length}
+          icon={XCircle}
+        />
       </div>
+
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+          <TabsList>
+            <TabsTrigger value="queue">Queue ({queue.length})</TabsTrigger>
+            <TabsTrigger value="mine">My reviews</TabsTrigger>
+            <TabsTrigger value="all">All</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <Select value={sort} onValueChange={(v) => setSort(v as Sort)}>
+          <SelectTrigger className="w-56">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="priority">Sort: clinical priority (NIHSS)</SelectItem>
+            <SelectItem value="confidence">Sort: lowest confidence first</SelectItem>
+            <SelectItem value="oldest">Sort: oldest first</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {list.length === 0 ? (
+        <EmptyState icon={CheckCircle} title={tab === "queue" ? "Queue is empty" : "Nothing here yet"}>
+          {tab === "queue" ? "All AI predictions have been read. New uploads will appear here once the AI finishes." : null}
+        </EmptyState>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {list.slice(0, 60).map((s) => {
+            const p = patients.get(s.patientId)
+            return (
+              <Card key={s.id} className="overflow-hidden flex flex-col">
+                <button className="relative block" onClick={() => setOpen(s)}>
+                  <ScanThumb scan={s} />
+                  <span className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[11px] text-white">{s.sequence}</span>
+                </button>
+                <CardHeader className="pb-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <CardTitle className="text-base">{s.id}</CardTitle>
+                      <CardDescription>
+                        {p?.name} · {p?.age} y · NIHSS {p?.nihssAdmission}
+                      </CardDescription>
+                    </div>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">{fromNow(s.uploadedAt)}</span>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3 flex-1 flex flex-col">
+                  <div className="flex flex-wrap gap-2">
+                    <LabelBadge label={s.ai!.label} />
+                    {s.status !== "pending-radiologist" && <StatusBadge status={s.status} />}
+                    {s.radiologistReview && <VerdictBadge verdict={s.radiologistReview.verdict} />}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    {s.ai!.region}
+                    {s.ai!.volumeMl ? ` · ${s.ai!.volumeMl} mL` : ""}
+                  </div>
+                  <ConfidenceBar value={s.ai!.confidence} threshold={threshold} />
+                  <div className="mt-auto flex gap-2 pt-2">
+                    {s.status === "pending-radiologist" ? (
+                      <>
+                        <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => quickAccept(s)} disabled={!can("review_ai")}>
+                          <CheckCircle className="h-4 w-4 mr-1" /> Accept
+                        </Button>
+                        <Button size="sm" variant="destructive" className="flex-1" onClick={() => setOpen(s)}>
+                          <XCircle className="h-4 w-4 mr-1" /> Reject…
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setOpen(s)}>
+                          Open
+                        </Button>
+                      </>
+                    ) : (
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => setOpen(s)}>
+                        View / amend review
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+
+      <ReviewDialog
+        key={open?.id}
+        scan={open ? (db.scans.find((x) => x.id === open.id) ?? null) : null}
+        patient={open ? patients.get(open.patientId) : undefined}
+        stage="radiologist"
+        open={!!open}
+        onOpenChange={(o) => !o && setOpen(null)}
+        threshold={threshold}
+      />
     </div>
   )
 }

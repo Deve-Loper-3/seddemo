@@ -1,212 +1,204 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import { Suspense, useMemo, useState } from "react"
+import { useSearchParams } from "next/navigation"
+import { Brain, MessagesSquare, RefreshCw, ScanLine, Search } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import Link from "next/link"
-import { ArrowLeft, ScanLine, Brain, CheckCircle, Clock } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { PageHeader } from "@/components/dashboard-shell"
+import { EmptyState, LabelBadge, StatusBadge } from "@/components/common"
+import { AnnotationWorkbench } from "@/components/annotation-workbench"
+import { AIFindings, PatientSummary, ReviewDialog } from "@/components/review-panel"
+import { NewCaseDialog } from "@/components/new-case-dialog"
+import { useDB, useStore } from "@/lib/store"
+import { fromNow, patientMap } from "@/lib/metrics"
+import { cn } from "@/lib/utils"
 
-const MRI_SCANS = [
-  {
-    id: "MRI-2024-001",
-    patientId: "PT-8821",
-    scanDate: "2024-01-15",
-    scanType: "DWI/ADC",
-    status: "pending-review",
-    aiDetection: "Acute Ischemic Stroke",
-    confidence: 0.92,
-    region: "Left MCA Territory",
-    slices: 24,
-    annotations: 0,
-  },
-  {
-    id: "MRI-2024-002",
-    patientId: "PT-8822",
-    scanDate: "2024-01-15",
-    scanType: "FLAIR",
-    status: "reviewed",
-    aiDetection: "Chronic Infarct",
-    confidence: 0.88,
-    region: "Right Frontal Lobe",
-    slices: 28,
-    annotations: 3,
-  },
-  {
-    id: "MRI-2024-003",
-    patientId: "PT-8823",
-    scanDate: "2024-01-14",
-    scanType: "DWI/ADC",
-    status: "pending-review",
-    aiDetection: "Acute Ischemic Stroke",
-    confidence: 0.95,
-    region: "Bilateral Watershed",
-    slices: 32,
-    annotations: 0,
-  },
-  {
-    id: "MRI-2024-004",
-    patientId: "PT-8824",
-    scanDate: "2024-01-14",
-    scanType: "T2-weighted",
-    status: "in-progress",
-    aiDetection: "Subacute Infarct",
-    confidence: 0.79,
-    region: "Left Parietal",
-    slices: 26,
-    annotations: 1,
-  },
-  {
-    id: "MRI-2024-005",
-    patientId: "PT-8825",
-    scanDate: "2024-01-13",
-    scanType: "DWI/ADC",
-    status: "reviewed",
-    aiDetection: "No Acute Findings",
-    confidence: 0.91,
-    region: "N/A",
-    slices: 30,
-    annotations: 2,
-  },
-]
+function MRIAnalysisInner() {
+  const db = useDB()
+  const { rerunAI } = useStore()
+  const params = useSearchParams()
+  const patients = useMemo(() => patientMap(db), [db])
+  const [q, setQ] = useState("")
+  const [status, setStatus] = useState("all")
+  const [seq, setSeq] = useState("all")
+  const [selectedId, setSelectedId] = useState<string | null>(params.get("scan"))
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [caseOpen, setCaseOpen] = useState(false)
 
-export default function MRIAnalysisPage() {
-  const router = useRouter()
+  const list = useMemo(() => {
+    const n = q.trim().toLowerCase()
+    return db.scans
+      .filter((s) => status === "all" || s.status === status)
+      .filter((s) => seq === "all" || s.sequence === seq)
+      .filter((s) => !n || s.id.toLowerCase().includes(n) || s.patientId.toLowerCase().includes(n) || patients.get(s.patientId)?.name.toLowerCase().includes(n))
+      .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+  }, [db.scans, q, status, seq, patients])
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "radiologist") {
-      router.push("/login")
-    }
-  }, [router])
-
-  const pendingScans = MRI_SCANS.filter((s) => s.status === "pending-review").length
-  const reviewedToday = MRI_SCANS.filter((s) => s.status === "reviewed").length
-  const avgConfidence = ((MRI_SCANS.reduce((acc, s) => acc + s.confidence, 0) / MRI_SCANS.length) * 100).toFixed(1)
+  const selected = db.scans.find((s) => s.id === selectedId) ?? list[0]
+  const patient = selected ? patients.get(selected.patientId) : undefined
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader title="MRI Analysis" description="Open studies in the viewer, adjust window/level and annotate lesions" icon={ScanLine} />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/radiologist">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
+      <div className="grid gap-6 xl:grid-cols-[340px_1fr]">
+        <Card className="h-fit xl:sticky xl:top-20">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Worklist ({list.length})</CardTitle>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input className="pl-9" placeholder="Scan ID, patient ID or name" value={q} onChange={(e) => setQ(e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Select value={status} onValueChange={setStatus}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="processing">AI processing</SelectItem>
+                  <SelectItem value="pending-radiologist">Awaiting radiologist</SelectItem>
+                  <SelectItem value="pending-validation">Awaiting validation</SelectItem>
+                  <SelectItem value="validated">Validated</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={seq} onValueChange={setSeq}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All sequences</SelectItem>
+                  {["DWI", "ADC", "FLAIR", "T2", "T1", "MRA"].map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardHeader>
+          <CardContent className="max-h-[60vh] overflow-y-auto p-2">
+            <ul className="space-y-1">
+              {list.map((s) => {
+                const p = patients.get(s.patientId)
+                return (
+                  <li key={s.id}>
+                    <button
+                      onClick={() => setSelectedId(s.id)}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-md p-2 text-left text-sm transition-colors",
+                        selected?.id === s.id ? "bg-primary/10 ring-1 ring-primary/30" : "hover:bg-muted",
+                      )}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={s.image} alt="" className="h-11 w-11 rounded object-cover bg-black" />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium">
+                          {s.id} <span className="text-muted-foreground font-normal">· {s.sequence}</span>
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {p?.name} · {fromNow(s.uploadedAt)}
+                        </div>
+                        <div className="mt-1">
+                          <StatusBadge status={s.status} />
+                        </div>
+                      </div>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </CardContent>
+        </Card>
 
-        <div className="flex items-center gap-3 mb-2">
-          <ScanLine className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">MRI Analysis</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Review and annotate MRI scan images</p>
-
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{pendingScans}</div>
-                  <div className="text-sm text-muted-foreground">Pending Review</div>
-                </div>
-                <Clock className="h-8 w-8 text-orange-500" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{reviewedToday}</div>
-                  <div className="text-sm text-muted-foreground">Reviewed Today</div>
-                </div>
-                <CheckCircle className="h-8 w-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{avgConfidence}%</div>
-                  <div className="text-sm text-muted-foreground">Avg AI Confidence</div>
-                </div>
-                <Brain className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* MRI Scans List */}
-        <div className="space-y-4">
-          {MRI_SCANS.map((scan) => (
-            <Card key={scan.id} className="hover:shadow-md transition-shadow">
+        {selected ? (
+          <div className="space-y-6">
+            <Card>
               <CardHeader>
-                <div className="flex items-start justify-between">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <CardTitle className="text-lg">{scan.id}</CardTitle>
+                    <CardTitle className="flex flex-wrap items-center gap-2">
+                      {selected.id} <StatusBadge status={selected.status} />
+                      {selected.ai && <LabelBadge label={selected.ai.label} />}
+                    </CardTitle>
                     <CardDescription>
-                      Patient: {scan.patientId} • {scan.scanDate}
+                      {selected.fileName} · {selected.fileSizeMb} MB · uploaded by {selected.uploadedBy} {fromNow(selected.uploadedAt)}
                     </CardDescription>
                   </div>
-                  <Badge
-                    variant={
-                      scan.status === "reviewed" ? "default" : scan.status === "in-progress" ? "secondary" : "outline"
-                    }
-                  >
-                    {scan.status === "pending-review"
-                      ? "Pending Review"
-                      : scan.status === "in-progress"
-                        ? "In Progress"
-                        : "Reviewed"}
-                  </Badge>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => setReviewOpen(true)} disabled={!selected.ai}>
+                      <Brain className="h-4 w-4 mr-1" /> {selected.radiologistReview ? "Amend review" : "Review AI result"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setCaseOpen(true)}>
+                      <MessagesSquare className="h-4 w-4 mr-1" /> Discuss case
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        rerunAI(selected.id)
+                        toast.info(`${selected.id} re-queued for AI analysis`)
+                      }}
+                    >
+                      <RefreshCw className="h-4 w-4 mr-1" /> Re-run AI
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="grid md:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <div className="text-sm font-medium mb-1">Scan Type</div>
-                    <div className="text-sm text-muted-foreground">{scan.scanType}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Slices</div>
-                    <div className="text-sm text-muted-foreground">{scan.slices} slices</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">AI Detection</div>
-                    <div className="text-sm text-muted-foreground">{scan.aiDetection}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Confidence</div>
-                    <div className="text-sm text-muted-foreground">{(scan.confidence * 100).toFixed(1)}%</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Region</div>
-                    <div className="text-sm text-muted-foreground">{scan.region}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Annotations</div>
-                    <div className="text-sm text-muted-foreground">{scan.annotations} annotations</div>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" className="flex-1">
-                    <ScanLine className="h-4 w-4 mr-2" />
-                    View Scan
-                  </Button>
-                  <Button size="sm" variant="outline" className="flex-1 bg-transparent">
-                    Add Annotation
-                  </Button>
-                </div>
+                <AnnotationWorkbench key={selected.id} scan={selected} />
               </CardContent>
             </Card>
-          ))}
-        </div>
+            <div className="grid gap-6 md:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Patient</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <PatientSummary patient={patient} />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">AI findings</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <AIFindings scan={selected} threshold={db.settings.aiConfidenceThreshold} />
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        ) : (
+          <EmptyState icon={ScanLine} title="No scans match the filters" />
+        )}
       </div>
+
+      {selected && (
+        <>
+          <ReviewDialog
+            key={selected.id}
+            scan={selected}
+            patient={patient}
+            stage="radiologist"
+            open={reviewOpen}
+            onOpenChange={setReviewOpen}
+            threshold={db.settings.aiConfidenceThreshold}
+          />
+          <NewCaseDialog scanId={selected.id} open={caseOpen} onOpenChange={setCaseOpen} />
+        </>
+      )}
     </div>
+  )
+}
+
+export default function MRIAnalysisPage() {
+  return (
+    <Suspense fallback={null}>
+      <MRIAnalysisInner />
+    </Suspense>
   )
 }

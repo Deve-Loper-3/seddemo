@@ -1,202 +1,197 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
-import { Button } from "@/components/ui/button"
+import { useMemo, useState } from "react"
+import { Lightbulb, TrendingUp } from "lucide-react"
+import { Area, AreaChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import Link from "next/link"
-import { ArrowLeft, TrendingUp, Calendar, AlertCircle } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { PageHeader } from "@/components/dashboard-shell"
+import { CHART_COLORS, StatCard } from "@/components/common"
+import { useDB } from "@/lib/store"
+import { groundTruth, lastMonths, monthKey, patientMap } from "@/lib/metrics"
 
-const MONTHLY_TRENDS = [
-  { month: "Aug 2023", cases: 187, avgAge: 66.2, malePercent: 56 },
-  { month: "Sep 2023", cases: 203, avgAge: 67.1, malePercent: 58 },
-  { month: "Oct 2023", cases: 219, avgAge: 66.8, malePercent: 57 },
-  { month: "Nov 2023", cases: 198, avgAge: 67.5, malePercent: 59 },
-  { month: "Dec 2023", cases: 234, avgAge: 67.3, malePercent: 58 },
-  { month: "Jan 2024", cases: 206, avgAge: 67.2, malePercent: 58 },
-]
-
-const SEASONAL_PATTERNS = [
-  { season: "Summer 2023", cases: 542, avgSeverity: 12.3 },
-  { season: "Fall 2023", cases: 620, avgSeverity: 13.1 },
-  { season: "Winter 2023-24", cases: 440, avgSeverity: 12.8 },
-]
-
-const KEY_FINDINGS = [
-  {
-    title: "Increasing Case Volume",
-    description: "15% increase in stroke cases observed from August to December 2023",
-    impact: "high",
-  },
-  {
-    title: "Age Trend Stability",
-    description: "Mean patient age remains consistent around 67 years across all months",
-    impact: "medium",
-  },
-  {
-    title: "Gender Distribution",
-    description: "Male patients consistently represent 57-59% of cases",
-    impact: "medium",
-  },
-  {
-    title: "Seasonal Variation",
-    description: "Fall months show 14% higher case volume compared to summer",
-    impact: "high",
-  },
-]
+const hours = (a: string, b: string) => (new Date(b).getTime() - new Date(a).getTime()) / 3_600_000
+const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null)
 
 export default function TrendAnalysisPage() {
-  const router = useRouter()
+  const db = useDB()
+  const [months, setMonths] = useState(12)
+  const [site, setSite] = useState("all")
+  const patients = useMemo(() => patientMap(db), [db])
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "analyst") {
-      router.push("/login")
+  const pts = db.patients.filter((p) => site === "all" || p.site === site)
+  const scans = db.scans.filter((s) => site === "all" || patients.get(s.patientId)?.site === site)
+
+  const series = lastMonths(months).map((m) => {
+    const mp = pts.filter((p) => monthKey(p.admittedAt) === m.key)
+    const ms = scans.filter((s) => monthKey(s.uploadedAt) === m.key)
+    const adj = ms.filter((s) => groundTruth(s))
+    const pos = adj.filter((s) => groundTruth(s) === "Ischemic stroke")
+    const rad = ms.filter((s) => s.radiologistReview).map((s) => hours(s.uploadedAt, s.radiologistReview!.at))
+    const val = ms.filter((s) => s.expertValidation).map((s) => hours(s.uploadedAt, s.expertValidation!.at))
+    const agree = adj.filter((s) => s.ai && s.ai.label === groundTruth(s))
+    return {
+      month: m.label,
+      Patients: mp.length,
+      Scans: ms.length,
+      "Stroke positivity %": adj.length ? Math.round((pos.length / adj.length) * 100) : null,
+      "AI accuracy %": adj.length ? Math.round((agree.length / adj.length) * 100) : null,
+      "Radiologist read (h)": avg(rad) !== null ? +avg(rad)!.toFixed(1) : null,
+      "Expert validation (h)": avg(val) !== null ? +avg(val)!.toFixed(1) : null,
+      "Mean NIHSS": mp.length ? +avg(mp.map((p) => p.nihssAdmission))!.toFixed(1) : null,
+      "Onset→scan (h)": mp.length ? +avg(mp.map((p) => p.symptomOnsetHours))!.toFixed(1) : null,
     }
-  }, [router])
+  })
 
-  const maxCases = Math.max(...MONTHLY_TRENDS.map((m) => m.cases))
-  const totalCases = MONTHLY_TRENDS.reduce((acc, m) => acc + m.cases, 0)
-  const avgCasesPerMonth = (totalCases / MONTHLY_TRENDS.length).toFixed(0)
+  const half = Math.floor(series.length / 2)
+  const sum = (k: "Patients" | "Scans", from: number, to: number) => series.slice(from, to).reduce((a, r) => a + r[k], 0)
+  const recent = sum("Patients", half, series.length)
+  const earlier = sum("Patients", 0, half)
+  const growth = earlier ? Math.round(((recent - earlier) / earlier) * 100) : 0
+  const readTimes = series.map((r) => r["Radiologist read (h)"]).filter((x): x is number => x !== null)
+  const accs = series.map((r) => r["AI accuracy %"]).filter((x): x is number => x !== null)
+
+  const findings = [
+    `Enrolment in the last ${months - half} months is ${growth >= 0 ? "up" : "down"} ${Math.abs(growth)}% versus the preceding ${half} months (${recent} vs ${earlier} patients).`,
+    readTimes.length ? `Mean time from upload to radiologist read ranges from ${Math.min(...readTimes)} h to ${Math.max(...readTimes)} h across months.` : "Not enough radiologist reads for turnaround analysis.",
+    accs.length ? `Monthly AI accuracy ranges between ${Math.min(...accs)}% and ${Math.max(...accs)}%; small monthly samples cause most of the variation.` : "No adjudicated scans in this period.",
+    `${db.scans.filter((s) => s.status !== "validated").length} scans are still moving through the review pipeline and are excluded from accuracy trends.`,
+  ]
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader
+        title="Trend Analysis"
+        description="Monthly patterns in enrolment, positivity, AI accuracy and turnaround"
+        icon={TrendingUp}
+        actions={
+          <>
+            <Select value={site} onValueChange={setSite}>
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sites</SelectItem>
+                {db.sites.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={String(months)} onValueChange={(v) => setMonths(Number(v))}>
+              <SelectTrigger className="w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="6">Last 6 months</SelectItem>
+                <SelectItem value="12">Last 12 months</SelectItem>
+              </SelectContent>
+            </Select>
+          </>
+        }
+      />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/analyst">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label={`Patients (${months} mo)`} value={series.reduce((a, r) => a + r.Patients, 0)} />
+        <StatCard label={`Scans (${months} mo)`} value={series.reduce((a, r) => a + r.Scans, 0)} />
+        <StatCard label="Enrolment trend" value={`${growth >= 0 ? "+" : ""}${growth}%`} tone={growth >= 0 ? "green" : "red"} />
+        <StatCard label="Avg radiologist turnaround" value={readTimes.length ? `${avg(readTimes)!.toFixed(1)} h` : "—"} />
+      </div>
 
-        <div className="flex items-center gap-3 mb-2">
-          <TrendingUp className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">Trend Analysis</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Identify patterns in stroke data</p>
-
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{totalCases}</div>
-                  <div className="text-sm text-muted-foreground">Total Cases (6mo)</div>
-                </div>
-                <Calendar className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{avgCasesPerMonth}</div>
-                  <div className="text-sm text-muted-foreground">Avg Cases/Month</div>
-                </div>
-                <TrendingUp className="h-8 w-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">67.2</div>
-                  <div className="text-sm text-muted-foreground">Mean Age</div>
-                </div>
-                <AlertCircle className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Monthly Case Volume */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Monthly Case Volume Trend</CardTitle>
-            <CardDescription>Number of stroke cases per month</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {MONTHLY_TRENDS.map((month, index) => (
-                <div key={month.month} className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium w-28">{month.month}</span>
-                    <span className="text-muted-foreground">{month.cases} cases</span>
-                  </div>
-                  <div className="h-8 bg-primary/10 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary flex items-center justify-end pr-4 text-sm font-medium text-white"
-                      style={{ width: `${(month.cases / maxCases) * 100}%` }}
-                    >
-                      {month.cases}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Seasonal Patterns */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Seasonal Patterns</CardTitle>
-            <CardDescription>Case volume and severity by season</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {SEASONAL_PATTERNS.map((season) => (
-                <div key={season.season} className="border rounded-lg p-4">
-                  <div className="font-semibold mb-3">{season.season}</div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="text-sm text-muted-foreground">Total Cases</div>
-                      <div className="text-2xl font-bold text-primary">{season.cases}</div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-muted-foreground">Avg NIHSS Score</div>
-                      <div className="text-2xl font-bold text-primary">{season.avgSeverity}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Key Findings */}
+      <div className="grid gap-6 lg:grid-cols-2 mb-6">
         <Card>
           <CardHeader>
-            <CardTitle>Key Findings</CardTitle>
-            <CardDescription>Important trends and patterns identified</CardDescription>
+            <CardTitle>Enrolment volume</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {KEY_FINDINGS.map((finding, index) => (
-                <div key={index} className="border rounded-lg p-4">
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={`mt-1 h-2 w-2 rounded-full flex-shrink-0 ${
-                        finding.impact === "high" ? "bg-red-500" : "bg-orange-500"
-                      }`}
-                    />
-                    <div className="flex-1">
-                      <div className="font-semibold mb-1">{finding.title}</div>
-                      <div className="text-sm text-muted-foreground">{finding.description}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={series}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="month" fontSize={11} />
+                <YAxis allowDecimals={false} fontSize={11} />
+                <Tooltip />
+                <Legend />
+                <Area type="monotone" dataKey="Patients" stroke={CHART_COLORS[0]} fill={CHART_COLORS[0]} fillOpacity={0.2} />
+                <Area type="monotone" dataKey="Scans" stroke={CHART_COLORS[5]} fill={CHART_COLORS[5]} fillOpacity={0.15} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Positivity & AI accuracy</CardTitle>
+            <CardDescription>Adjudicated scans only</CardDescription>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={series}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="month" fontSize={11} />
+                <YAxis domain={[0, 100]} unit="%" fontSize={11} />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="Stroke positivity %" stroke={CHART_COLORS[1]} strokeWidth={2} connectNulls />
+                <Line type="monotone" dataKey="AI accuracy %" stroke={CHART_COLORS[2]} strokeWidth={2} connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Review turnaround</CardTitle>
+            <CardDescription>Mean hours from upload</CardDescription>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={series}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="month" fontSize={11} />
+                <YAxis unit="h" fontSize={11} />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="Radiologist read (h)" stroke={CHART_COLORS[3]} strokeWidth={2} connectNulls />
+                <Line type="monotone" dataKey="Expert validation (h)" stroke={CHART_COLORS[4]} strokeWidth={2} connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Clinical presentation</CardTitle>
+            <CardDescription>Mean admission NIHSS and onset-to-scan delay</CardDescription>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={series}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="month" fontSize={11} />
+                <YAxis fontSize={11} />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="Mean NIHSS" stroke={CHART_COLORS[1]} strokeWidth={2} connectNulls />
+                <Line type="monotone" dataKey="Onset→scan (h)" stroke={CHART_COLORS[7]} strokeWidth={2} connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lightbulb className="h-5 w-5 text-amber-500" /> Key findings
+          </CardTitle>
+          <CardDescription>Generated from the data above</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="list-disc pl-6 space-y-2 text-sm">
+            {findings.map((f) => (
+              <li key={f}>{f}</li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   )
 }

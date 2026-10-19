@@ -1,169 +1,132 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import { Save, Settings } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import Link from "next/link"
-import { ArrowLeft, Settings, Save } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch"
+import { PageHeader } from "@/components/dashboard-shell"
+import { useDB, useStore } from "@/lib/store"
+import type { Settings as S } from "@/lib/types"
+
+const MODEL_VERSIONS = ["StrokeNet v2.1", "StrokeNet v2.2", "StrokeNet v2.3 (ensemble)"]
+
+function Row({ label, hint, children }: { label: string; hint: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-3 border-b py-4 last:border-0 md:flex-row md:items-center md:justify-between">
+      <div className="max-w-xl">
+        <div className="font-medium">{label}</div>
+        <div className="text-sm text-muted-foreground">{hint}</div>
+      </div>
+      <div className="md:w-72">{children}</div>
+    </div>
+  )
+}
 
 export default function SystemSettingsPage() {
-  const router = useRouter()
-  const [settings, setSettings] = useState({
-    systemName: "Stroke AI Research Platform",
-    maxUploadSize: "100",
-    sessionTimeout: "60",
-    aiConfidenceThreshold: "0.75",
-    emailNotifications: true,
-    autoBackup: true,
-    maintenanceMode: false,
-  })
+  const db = useDB()
+  const { updateSettings } = useStore()
+  const [s, setS] = useState<S>(db.settings)
+  useEffect(() => setS(db.settings), [db.settings])
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "admin") {
-      router.push("/login")
-    }
-  }, [router])
+  const dirty = JSON.stringify(s) !== JSON.stringify(db.settings)
+  const set = <K extends keyof S>(k: K, v: S[K]) => setS((x) => ({ ...x, [k]: v }))
 
-  const handleSave = () => {
-    alert("Settings saved successfully!")
+  const save = () => {
+    const changed = (Object.keys(s) as (keyof S)[]).filter((k) => s[k] !== db.settings[k])
+    if (!s.studyName.trim()) return toast.error("Study name is required")
+    updateSettings(Object.fromEntries(changed.map((k) => [k, s[k]])) as Partial<S>)
+    toast.success(`Saved ${changed.length} setting(s)`)
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div className="max-w-4xl">
+      <PageHeader
+        title="System Settings"
+        description="Changes apply immediately for every user of the platform"
+        icon={Settings}
+        actions={
+          <>
+            <Button variant="outline" disabled={!dirty} onClick={() => setS(db.settings)}>
+              Discard
+            </Button>
+            <Button onClick={save} disabled={!dirty}>
+              <Save className="h-4 w-4 mr-2" /> Save changes
+            </Button>
+          </>
+        }
+      />
 
-      <div className="container mx-auto px-4 pt-24 pb-20 max-w-4xl">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/admin">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Study</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Row label="Study name" hint="Shown on every dashboard.">
+            <Input value={s.studyName} onChange={(e) => set("studyName", e.target.value)} />
+          </Row>
+        </CardContent>
+      </Card>
 
-        <div className="flex items-center gap-3 mb-2">
-          <Settings className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">System Settings</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Configure system parameters</p>
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>AI pipeline</CardTitle>
+          <CardDescription>Controls the simulated inference service</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Row label="Active model version" hint="Used for every new prediction.">
+            <Select value={s.activeModelVersion} onValueChange={(v) => set("activeModelVersion", v)}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MODEL_VERSIONS.map((v) => (
+                  <SelectItem key={v} value={v}>
+                    {v}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Row>
+          <Row
+            label={`Low-confidence threshold: ${Math.round(s.aiConfidenceThreshold * 100)}%`}
+            hint="Predictions below this are flagged with a warning icon in review queues."
+          >
+            <Slider value={[s.aiConfidenceThreshold]} min={0.5} max={0.99} step={0.01} onValueChange={([v]) => set("aiConfidenceThreshold", v)} />
+          </Row>
+          <Row label="Run AI automatically on upload" hint="When off, uploads wait in “AI processing” until this is re-enabled.">
+            <Switch checked={s.autoRunAI} onCheckedChange={(v) => set("autoRunAI", v)} />
+          </Row>
+          <Row label="Require expert validation" hint="When off, a radiologist review finalises the case without the doctor step.">
+            <Switch checked={s.requireDoubleReview} onCheckedChange={(v) => set("requireDoubleReview", v)} />
+          </Row>
+          <Row label="Max upload size (MB)" hint="Enforced on the Scan Upload page.">
+            <Input type="number" min={1} max={100} value={s.maxUploadMb} onChange={(e) => set("maxUploadMb", Math.max(1, Number(e.target.value) || 1))} />
+          </Row>
+        </CardContent>
+      </Card>
 
-        {/* General Settings */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>General Settings</CardTitle>
-            <CardDescription>Basic system configuration</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="systemName">System Name</Label>
-              <Input
-                id="systemName"
-                value={settings.systemName}
-                onChange={(e) => setSettings({ ...settings, systemName: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="maxUploadSize">Max Upload Size (MB)</Label>
-              <Input
-                id="maxUploadSize"
-                type="number"
-                value={settings.maxUploadSize}
-                onChange={(e) => setSettings({ ...settings, maxUploadSize: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sessionTimeout">Session Timeout (minutes)</Label>
-              <Input
-                id="sessionTimeout"
-                type="number"
-                value={settings.sessionTimeout}
-                onChange={(e) => setSettings({ ...settings, sessionTimeout: e.target.value })}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* AI Settings */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>AI Model Settings</CardTitle>
-            <CardDescription>Configure AI detection parameters</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="aiThreshold">AI Confidence Threshold</Label>
-              <Input
-                id="aiThreshold"
-                type="number"
-                step="0.01"
-                min="0"
-                max="1"
-                value={settings.aiConfidenceThreshold}
-                onChange={(e) => setSettings({ ...settings, aiConfidenceThreshold: e.target.value })}
-              />
-              <p className="text-xs text-muted-foreground">
-                Minimum confidence score (0-1) for AI predictions to be flagged
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* System Features */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>System Features</CardTitle>
-            <CardDescription>Enable or disable system features</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-medium">Email Notifications</div>
-                <div className="text-sm text-muted-foreground">Send email alerts for important events</div>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.emailNotifications}
-                onChange={(e) => setSettings({ ...settings, emailNotifications: e.target.checked })}
-                className="h-5 w-5"
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-medium">Automatic Backup</div>
-                <div className="text-sm text-muted-foreground">Daily automated database backups</div>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.autoBackup}
-                onChange={(e) => setSettings({ ...settings, autoBackup: e.target.checked })}
-                className="h-5 w-5"
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-medium">Maintenance Mode</div>
-                <div className="text-sm text-muted-foreground">Restrict system access for maintenance</div>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.maintenanceMode}
-                onChange={(e) => setSettings({ ...settings, maintenanceMode: e.target.checked })}
-                className="h-5 w-5"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Save Button */}
-        <Button onClick={handleSave} className="w-full">
-          <Save className="h-4 w-4 mr-2" />
-          Save Settings
-        </Button>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Platform</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Row label="Session timeout (minutes)" hint="Informational in this demo.">
+            <Input type="number" min={5} max={240} value={s.sessionTimeoutMin} onChange={(e) => set("sessionTimeoutMin", Number(e.target.value) || 30)} />
+          </Row>
+          <Row label="Email notifications" hint="Notify reviewers when new cases enter their queue (simulated).">
+            <Switch checked={s.emailNotifications} onCheckedChange={(v) => set("emailNotifications", v)} />
+          </Row>
+          <Row label="Maintenance mode" hint="Blocks sign-in for everyone except administrators.">
+            <Switch checked={s.maintenanceMode} onCheckedChange={(v) => set("maintenanceMode", v)} />
+          </Row>
+        </CardContent>
+      </Card>
     </div>
   )
 }

@@ -1,205 +1,172 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import { format, subDays } from "date-fns"
+import { Activity, Database, HardDrive, Mail, MailOpen, Users } from "lucide-react"
+import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from "recharts"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import Link from "next/link"
-import { ArrowLeft, BarChart3, Users, Database, Activity } from "lucide-react"
-
-const USAGE_STATS = [
-  { day: "Mon", logins: 18, uploads: 42, analyses: 67 },
-  { day: "Tue", logins: 21, uploads: 38, analyses: 71 },
-  { day: "Wed", logins: 19, uploads: 51, analyses: 84 },
-  { day: "Thu", logins: 22, uploads: 45, analyses: 78 },
-  { day: "Fri", logins: 20, uploads: 47, analyses: 82 },
-  { day: "Sat", logins: 12, uploads: 28, analyses: 43 },
-  { day: "Sun", logins: 9, uploads: 22, analyses: 35 },
-]
-
-const SYSTEM_HEALTH = [
-  { metric: "Database Performance", value: 98, status: "excellent" },
-  { metric: "API Response Time", value: 95, status: "excellent" },
-  { metric: "Storage Usage", value: 67, status: "good" },
-  { metric: "AI Model Uptime", value: 99.8, status: "excellent" },
-]
+import { Progress } from "@/components/ui/progress"
+import { PageHeader } from "@/components/dashboard-shell"
+import { CHART_COLORS, StatCard } from "@/components/common"
+import { useDB, useStore } from "@/lib/store"
+import { fromNow } from "@/lib/metrics"
+import { ROLE_LABELS, type Role } from "@/lib/types"
 
 export default function SystemAnalyticsPage() {
-  const router = useRouter()
+  const db = useDB()
+  const { markInquiryRead } = useStore()
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "admin") {
-      router.push("/login")
-    }
-  }, [router])
+  const activity = Array.from({ length: 14 }, (_, i) => {
+    const d = subDays(new Date(), 13 - i)
+    const key = d.toDateString()
+    const ev = db.audit.filter((a) => new Date(a.at).toDateString() === key)
+    return { day: format(d, "d MMM"), Events: ev.length, Logins: ev.filter((a) => a.action === "login").length }
+  })
 
-  const totalLogins = USAGE_STATS.reduce((acc, d) => acc + d.logins, 0)
-  const totalUploads = USAGE_STATS.reduce((acc, d) => acc + d.uploads, 0)
-  const totalAnalyses = USAGE_STATS.reduce((acc, d) => acc + d.analyses, 0)
-  const maxValue = Math.max(...USAGE_STATS.map((d) => Math.max(d.logins, d.uploads, d.analyses)))
+  const pipeline = [
+    { name: "AI processing", value: db.scans.filter((s) => s.status === "processing").length },
+    { name: "Awaiting radiologist", value: db.scans.filter((s) => s.status === "pending-radiologist").length },
+    { name: "Awaiting validation", value: db.scans.filter((s) => s.status === "pending-validation").length },
+    { name: "Validated", value: db.scans.filter((s) => s.status === "validated").length },
+  ]
+
+  const activeUsers7 = new Set(db.audit.filter((a) => a.action === "login" && Date.now() - new Date(a.at).getTime() < 7 * 86_400_000).map((a) => a.user)).size
+  const storageMb = db.scans.reduce((a, s) => a + s.fileSizeMb, 0)
+  let localBytes = 0
+  try {
+    localBytes = (localStorage.getItem("strokeai-demo-db") ?? "").length * 2
+  } catch {}
+
+  const byRole = (Object.keys(ROLE_LABELS) as Role[]).map((r) => ({
+    role: ROLE_LABELS[r],
+    actions: db.audit.filter((a) => db.users.find((u) => u.name === a.user)?.role === r).length,
+  }))
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader title="System Analytics" description="Platform usage, pipeline health and contact inquiries" icon={Activity} />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/admin">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Active users (7 days)" value={activeUsers7} icon={Users} />
+        <StatCard label="Total MRI studies" value={db.scans.length} icon={Database} />
+        <StatCard label="Imaging storage (simulated)" value={`${(storageMb / 1024).toFixed(2)} GB`} icon={HardDrive} />
+        <StatCard label="Unread inquiries" value={db.inquiries.filter((i) => !i.read).length} icon={Mail} tone="orange" />
+      </div>
 
-        <div className="flex items-center gap-3 mb-2">
-          <BarChart3 className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">System Analytics</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Monitor overall system usage</p>
-
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-4 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{totalLogins}</div>
-                  <div className="text-sm text-muted-foreground">Total Logins</div>
-                </div>
-                <Users className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{totalUploads}</div>
-                  <div className="text-sm text-muted-foreground">Scans Uploaded</div>
-                </div>
-                <Database className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{totalAnalyses}</div>
-                  <div className="text-sm text-muted-foreground">AI Analyses</div>
-                </div>
-                <Activity className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">99.8%</div>
-                  <div className="text-sm text-muted-foreground">System Uptime</div>
-                </div>
-                <BarChart3 className="h-8 w-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Weekly Activity */}
-        <Card className="mb-8">
+      <div className="grid gap-6 lg:grid-cols-3 mb-6">
+        <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Weekly Activity</CardTitle>
-            <CardDescription>System usage metrics for the past 7 days</CardDescription>
+            <CardTitle>Platform activity</CardTitle>
+            <CardDescription>Audit events per day (last 14 days)</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-6">
-              {USAGE_STATS.map((day) => (
-                <div key={day.day} className="space-y-2">
-                  <div className="font-medium text-sm">{day.day}</div>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                      <div className="w-20 text-xs text-muted-foreground">Logins</div>
-                      <div className="flex-1 h-6 bg-primary/10 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-blue-500 flex items-center justify-end pr-2 text-xs font-medium text-white"
-                          style={{ width: `${(day.logins / maxValue) * 100}%` }}
-                        >
-                          {day.logins}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="w-20 text-xs text-muted-foreground">Uploads</div>
-                      <div className="flex-1 h-6 bg-primary/10 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-green-500 flex items-center justify-end pr-2 text-xs font-medium text-white"
-                          style={{ width: `${(day.uploads / maxValue) * 100}%` }}
-                        >
-                          {day.uploads}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="w-20 text-xs text-muted-foreground">Analyses</div>
-                      <div className="flex-1 h-6 bg-primary/10 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary flex items-center justify-end pr-2 text-xs font-medium text-white"
-                          style={{ width: `${(day.analyses / maxValue) * 100}%` }}
-                        >
-                          {day.analyses}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={activity}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="day" fontSize={11} />
+                <YAxis allowDecimals={false} fontSize={11} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="Events" fill={CHART_COLORS[0]} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="Logins" fill={CHART_COLORS[2]} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </CardContent>
         </Card>
-
-        {/* System Health */}
         <Card>
           <CardHeader>
-            <CardTitle>System Health</CardTitle>
-            <CardDescription>Current system performance metrics</CardDescription>
+            <CardTitle>Review pipeline</CardTitle>
+            <CardDescription>Where every scan currently sits</CardDescription>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={pipeline} dataKey="value" nameKey="name" innerRadius={50} outerRadius={85} paddingAngle={2}>
+                  {pipeline.map((_, i) => (
+                    <Cell key={i} fill={["#0ea5e9", "#f97316", "#8b5cf6", "#10b981"][i]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>System health</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            {[
+              ["AI inference service", db.settings.autoRunAI ? "Operational" : "Paused", db.settings.autoRunAI ? 100 : 0],
+              ["Active model", db.settings.activeModelVersion, 100],
+              ["Browser storage used", `${(localBytes / 1024).toFixed(0)} KB of ~5 MB`, Math.min(100, (localBytes / (5 * 1024 * 1024)) * 100)],
+              ["Maintenance mode", db.settings.maintenanceMode ? "ON" : "Off", db.settings.maintenanceMode ? 100 : 0],
+            ].map(([k, v, p]) => (
+              <div key={k as string}>
+                <div className="flex justify-between mb-1">
+                  <span>{k}</span>
+                  <span className="font-medium">{v}</span>
+                </div>
+                <Progress value={p as number} />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Actions by role</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            {byRole.map((r) => (
+              <div key={r.role}>
+                <div className="flex justify-between mb-1">
+                  <span>{r.role}</span>
+                  <span className="tabular-nums">{r.actions}</span>
+                </div>
+                <Progress value={(r.actions / Math.max(1, ...byRole.map((x) => x.actions))) * 100} />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Contact inquiries</CardTitle>
+            <CardDescription>Submitted from the public website</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {SYSTEM_HEALTH.map((item) => (
-                <div key={item.metric} className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium">{item.metric}</span>
-                    <span className="text-muted-foreground">
-                      {item.value}%{" "}
-                      <span
-                        className={`ml-2 ${
-                          item.status === "excellent"
-                            ? "text-green-600"
-                            : item.status === "good"
-                              ? "text-blue-600"
-                              : "text-orange-600"
-                        }`}
-                      >
-                        ({item.status})
-                      </span>
-                    </span>
-                  </div>
-                  <div className="h-3 bg-primary/10 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full ${
-                        item.status === "excellent"
-                          ? "bg-green-500"
-                          : item.status === "good"
-                            ? "bg-blue-500"
-                            : "bg-orange-500"
-                      }`}
-                      style={{ width: `${item.value}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+            {db.inquiries.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No inquiries.</p>
+            ) : (
+              <ul className="space-y-3 max-h-96 overflow-y-auto">
+                {db.inquiries.map((i) => (
+                  <li key={i.id} className={`rounded-lg border p-3 text-sm ${i.read ? "" : "border-primary/40 bg-primary/5"}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-medium">{i.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {i.email}
+                          {i.institution && ` · ${i.institution}`}
+                        </div>
+                      </div>
+                      {!i.read && <Badge>New</Badge>}
+                    </div>
+                    <p className="mt-2">{i.message}</p>
+                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{fromNow(i.at)}</span>
+                      <Button size="sm" variant="ghost" className="h-7" onClick={() => markInquiryRead(i.id, !i.read)}>
+                        {i.read ? <Mail className="h-3.5 w-3.5 mr-1" /> : <MailOpen className="h-3.5 w-3.5 mr-1" />}
+                        Mark {i.read ? "unread" : "read"}
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </CardContent>
         </Card>
       </div>

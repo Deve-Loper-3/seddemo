@@ -1,221 +1,216 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import Link from "next/link"
+import { useMemo, useState } from "react"
+import { CheckCircle2, MessagesSquare, Plus, RotateCcw, ScanLine, Send } from "lucide-react"
+import { toast } from "sonner"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import Link from "next/link"
-import { ArrowLeft, Users, MessageSquare, AlertCircle } from "lucide-react"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
+import { PageHeader } from "@/components/dashboard-shell"
+import { EmptyState, LabelBadge, StatCard, StatusBadge } from "@/components/common"
+import { ScanThumb } from "@/components/scan-viewer"
+import { NewCaseDialog } from "@/components/new-case-dialog"
+import { useDB, useStore } from "@/lib/store"
+import { fmtDateTime, fromNow, patientMap } from "@/lib/metrics"
+import type { CaseDiscussion } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
-const CASE_REVIEWS = [
-  {
-    id: "CASE-2024-012",
-    patientId: "PT-8821",
-    scanId: "MRI-2024-001",
-    title: "Complex bilateral watershed infarction",
-    description:
-      "Patient presents with unusual bilateral watershed pattern. AI confidence high but seeking second opinion on extent.",
-    requestedBy: "Dr. Sarah Chen",
-    status: "open",
-    priority: "high",
-    comments: 3,
-    dateRequested: "2024-01-15",
-  },
-  {
-    id: "CASE-2024-011",
-    patientId: "PT-8819",
-    scanId: "MRI-2023-998",
-    title: "Differentiation between acute and subacute",
-    description:
-      "DWI shows restricted diffusion but FLAIR signal suggests subacute timing. Need consensus on classification.",
-    requestedBy: "Dr. Michael Torres",
-    status: "in-review",
-    priority: "medium",
-    comments: 7,
-    dateRequested: "2024-01-14",
-  },
-  {
-    id: "CASE-2024-010",
-    patientId: "PT-8817",
-    scanId: "MRI-2023-995",
-    title: "Small cortical infarct vs artifact",
-    description: "Subtle signal abnormality in right parietal cortex. AI flagged as infarct but could be artifact.",
-    requestedBy: "Dr. James Wilson",
-    status: "resolved",
-    priority: "low",
-    comments: 5,
-    dateRequested: "2024-01-13",
-    dateResolved: "2024-01-14",
-  },
-  {
-    id: "CASE-2024-009",
-    patientId: "PT-8815",
-    scanId: "MRI-2023-992",
-    title: "Hemorrhagic transformation assessment",
-    description:
-      "Follow-up scan showing possible hemorrhagic transformation. Need expert review for treatment planning.",
-    requestedBy: "Dr. Sarah Chen",
-    status: "resolved",
-    priority: "high",
-    comments: 9,
-    dateRequested: "2024-01-12",
-    dateResolved: "2024-01-13",
-  },
-]
+const PRIORITY_CLS: Record<CaseDiscussion["priority"], string> = {
+  Routine: "bg-slate-100 text-slate-700 border-slate-200",
+  Urgent: "bg-amber-100 text-amber-800 border-amber-200",
+  Critical: "bg-red-100 text-red-700 border-red-200",
+}
 
 export default function CaseReviewsPage() {
-  const router = useRouter()
+  const db = useDB()
+  const { user, addComment, setCaseStatus } = useStore()
+  const patients = useMemo(() => patientMap(db), [db])
+  const [tab, setTab] = useState<"open" | "resolved" | "all">("open")
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [newOpen, setNewOpen] = useState(false)
+  const [reply, setReply] = useState("")
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "radiologist") {
-      router.push("/login")
-    }
-  }, [router])
+  const order = { Critical: 0, Urgent: 1, Routine: 2 }
+  const list = db.cases
+    .filter((c) => tab === "all" || c.status === tab)
+    .sort((a, b) => order[a.priority] - order[b.priority] || b.createdAt.localeCompare(a.createdAt))
+  const selected = db.cases.find((c) => c.id === selectedId) ?? list[0]
+  const scan = selected ? db.scans.find((s) => s.id === selected.scanId) : undefined
+  const patient = scan ? patients.get(scan.patientId) : undefined
 
-  const openCases = CASE_REVIEWS.filter((c) => c.status === "open").length
-  const inReview = CASE_REVIEWS.filter((c) => c.status === "in-review").length
-  const resolved = CASE_REVIEWS.filter((c) => c.status === "resolved").length
+  const send = () => {
+    if (!selected || !reply.trim()) return
+    addComment(selected.id, reply.trim())
+    setReply("")
+    toast.success("Comment posted")
+  }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader
+        title="Case Reviews"
+        description="Collaborate on complex or uncertain cases"
+        icon={MessagesSquare}
+        actions={
+          <Button onClick={() => setNewOpen(true)}>
+            <Plus className="h-4 w-4 mr-2" /> New case discussion
+          </Button>
+        }
+      />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/radiologist">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Open" value={db.cases.filter((c) => c.status === "open").length} tone="orange" />
+        <StatCard label="Critical / urgent open" value={db.cases.filter((c) => c.status === "open" && c.priority !== "Routine").length} tone="red" />
+        <StatCard label="Resolved" value={db.cases.filter((c) => c.status === "resolved").length} tone="green" />
+        <StatCard label="Started by you" value={db.cases.filter((c) => c.createdBy === user?.name).length} />
+      </div>
 
-        <div className="flex items-center gap-3 mb-2">
-          <Users className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">Case Reviews</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Collaborate on complex cases</p>
-
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{openCases}</div>
-                  <div className="text-sm text-muted-foreground">Open Cases</div>
-                </div>
-                <AlertCircle className="h-8 w-8 text-orange-500" />
+      <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
+        <div className="space-y-3">
+          <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+            <TabsList className="w-full">
+              <TabsTrigger value="open" className="flex-1">
+                Open
+              </TabsTrigger>
+              <TabsTrigger value="resolved" className="flex-1">
+                Resolved
+              </TabsTrigger>
+              <TabsTrigger value="all" className="flex-1">
+                All
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {list.length === 0 && <EmptyState title="No cases" />}
+          {list.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setSelectedId(c.id)}
+              className={cn("w-full rounded-lg border bg-card p-3 text-left transition-colors", selected?.id === c.id ? "ring-2 ring-primary" : "hover:bg-muted/50")}
+            >
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="font-mono text-xs text-muted-foreground">
+                  {c.id} · {c.scanId}
+                </span>
+                <Badge variant="outline" className={PRIORITY_CLS[c.priority]}>
+                  {c.priority}
+                </Badge>
               </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{inReview}</div>
-                  <div className="text-sm text-muted-foreground">In Review</div>
-                </div>
-                <Users className="h-8 w-8 text-primary" />
+              <div className="font-medium text-sm">{c.title}</div>
+              <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  {c.comments.length} comment(s) · {fromNow(c.comments.at(-1)?.at ?? c.createdAt)}
+                </span>
+                {c.status === "resolved" && <span className="text-emerald-600">Resolved</span>}
               </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{resolved}</div>
-                  <div className="text-sm text-muted-foreground">Resolved</div>
-                </div>
-                <MessageSquare className="h-8 w-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Case Reviews List */}
-        <div className="space-y-4">
-          {CASE_REVIEWS.map((caseReview) => (
-            <Card key={caseReview.id} className="hover:shadow-md transition-shadow">
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <CardTitle className="text-lg">{caseReview.title}</CardTitle>
-                      {caseReview.priority === "high" && (
-                        <Badge variant="destructive" className="text-xs">
-                          High Priority
-                        </Badge>
-                      )}
-                      {caseReview.priority === "medium" && (
-                        <Badge variant="secondary" className="text-xs">
-                          Medium
-                        </Badge>
-                      )}
-                    </div>
-                    <CardDescription>
-                      {caseReview.id} • Patient: {caseReview.patientId} • Scan: {caseReview.scanId}
-                    </CardDescription>
-                  </div>
-                  <Badge
-                    variant={
-                      caseReview.status === "resolved"
-                        ? "default"
-                        : caseReview.status === "in-review"
-                          ? "secondary"
-                          : "outline"
-                    }
-                  >
-                    {caseReview.status === "open"
-                      ? "Open"
-                      : caseReview.status === "in-review"
-                        ? "In Review"
-                        : "Resolved"}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-4">{caseReview.description}</p>
-                <div className="grid md:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <div className="text-sm font-medium mb-1">Requested By</div>
-                    <div className="text-sm text-muted-foreground">{caseReview.requestedBy}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Date Requested</div>
-                    <div className="text-sm text-muted-foreground">{caseReview.dateRequested}</div>
-                  </div>
-                  {caseReview.dateResolved && (
-                    <div>
-                      <div className="text-sm font-medium mb-1">Date Resolved</div>
-                      <div className="text-sm text-muted-foreground">{caseReview.dateResolved}</div>
-                    </div>
-                  )}
-                  <div>
-                    <div className="text-sm font-medium mb-1">Comments</div>
-                    <div className="text-sm text-muted-foreground flex items-center gap-1">
-                      <MessageSquare className="h-4 w-4" />
-                      {caseReview.comments} comments
-                    </div>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" className="flex-1">
-                    View Case Details
-                  </Button>
-                  {caseReview.status !== "resolved" && (
-                    <Button size="sm" variant="outline" className="flex-1 bg-transparent">
-                      <MessageSquare className="h-4 w-4 mr-2" />
-                      Add Comment
-                    </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+            </button>
           ))}
         </div>
+
+        {selected ? (
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <CardTitle>{selected.title}</CardTitle>
+                  <CardDescription>
+                    Opened by {selected.createdBy} · {fmtDateTime(selected.createdAt)}
+                  </CardDescription>
+                </div>
+                {selected.status === "open" ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setCaseStatus(selected.id, "resolved")
+                      toast.success(`${selected.id} resolved`)
+                    }}
+                  >
+                    <CheckCircle2 className="h-4 w-4 mr-2" /> Mark resolved
+                  </Button>
+                ) : (
+                  <Button variant="outline" onClick={() => setCaseStatus(selected.id, "open")}>
+                    <RotateCcw className="h-4 w-4 mr-2" /> Reopen
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {scan && (
+                <div className="flex flex-col gap-4 rounded-lg border p-3 sm:flex-row">
+                  <ScanThumb scan={scan} className="h-36 rounded overflow-hidden sm:w-40" />
+                  <div className="flex-1 space-y-2 text-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{scan.id}</span> <StatusBadge status={scan.status} />
+                      {scan.ai && <LabelBadge label={scan.ai.label} />}
+                    </div>
+                    {patient && (
+                      <div className="text-muted-foreground">
+                        {patient.name} · {patient.age} y · NIHSS {patient.nihssAdmission} · {patient.presentingSymptoms}
+                      </div>
+                    )}
+                    {scan.ai && (
+                      <div className="text-muted-foreground">
+                        AI: {scan.ai.region} · {Math.round(scan.ai.confidence * 100)}% confidence
+                      </div>
+                    )}
+                    <Button size="sm" variant="outline" asChild>
+                      <Link href={`/dashboard/radiologist/mri-analysis?scan=${scan.id}`}>
+                        <ScanLine className="h-4 w-4 mr-1" /> Open in viewer
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <ol className="space-y-4">
+                {selected.comments.map((cm) => (
+                  <li key={cm.id} className={cn("flex gap-3", cm.author === user?.name && "flex-row-reverse")}>
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                      {cm.author
+                        .replace(/^Dr\. /, "")
+                        .split(" ")
+                        .map((p) => p[0])
+                        .join("")}
+                    </span>
+                    <div className={cn("max-w-[80%] rounded-lg p-3 text-sm", cm.author === user?.name ? "bg-primary text-primary-foreground" : "bg-muted")}>
+                      <div className="mb-1 text-xs opacity-80">
+                        {cm.author} · {fromNow(cm.at)}
+                      </div>
+                      {cm.text}
+                    </div>
+                  </li>
+                ))}
+                {selected.comments.length === 0 && <p className="text-sm text-muted-foreground">No comments yet.</p>}
+              </ol>
+
+              {selected.status === "open" ? (
+                <div className="flex gap-2">
+                  <Textarea
+                    rows={2}
+                    value={reply}
+                    onChange={(e) => setReply(e.target.value)}
+                    placeholder="Add your opinion…"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send()
+                    }}
+                  />
+                  <Button onClick={send} disabled={!reply.trim()} className="self-end">
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">This case is resolved. Reopen it to add comments.</p>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          <EmptyState icon={MessagesSquare} title="Select a case" />
+        )}
       </div>
+
+      <NewCaseDialog open={newOpen} onOpenChange={setNewOpen} navigate={false} />
     </div>
   )
 }

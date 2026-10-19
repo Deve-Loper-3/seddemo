@@ -1,165 +1,166 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
-import { Button } from "@/components/ui/button"
+import { useMemo } from "react"
+import { format, subDays } from "date-fns"
+import { BarChart3 } from "lucide-react"
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import Link from "next/link"
-import { ArrowLeft, BarChart3, TrendingUp, Calendar, Award } from "lucide-react"
-
-const DAILY_STATS = [
-  { date: "Mon", entries: 42 },
-  { date: "Tue", entries: 38 },
-  { date: "Wed", entries: 51 },
-  { date: "Thu", entries: 45 },
-  { date: "Fri", entries: 47 },
-  { date: "Sat", entries: 28 },
-  { date: "Sun", entries: 22 },
-]
-
-const MONTHLY_STATS = [
-  { month: "Aug", entries: 892 },
-  { month: "Sep", entries: 945 },
-  { month: "Oct", entries: 1023 },
-  { month: "Nov", entries: 987 },
-  { month: "Dec", entries: 1156 },
-  { month: "Jan", entries: 1247 },
-]
+import { Progress } from "@/components/ui/progress"
+import { PageHeader } from "@/components/dashboard-shell"
+import { CHART_COLORS, StatCard } from "@/components/common"
+import { useDB, useStore } from "@/lib/store"
+import { groupCount, lastMonths, monthKey } from "@/lib/metrics"
 
 export default function EntryStatisticsPage() {
-  const router = useRouter()
+  const db = useDB()
+  const { user } = useStore()
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "data-entry") {
-      router.push("/login")
-    }
-  }, [router])
+  const daily = useMemo(() => {
+    return Array.from({ length: 14 }, (_, i) => {
+      const d = subDays(new Date(), 13 - i)
+      const key = d.toDateString()
+      return {
+        day: format(d, "d MMM"),
+        Patients: db.patients.filter((p) => new Date(p.createdAt).toDateString() === key).length,
+        Scans: db.scans.filter((s) => new Date(s.uploadedAt).toDateString() === key).length,
+      }
+    })
+  }, [db.patients, db.scans])
 
-  const maxDaily = Math.max(...DAILY_STATS.map((d) => d.entries))
-  const maxMonthly = Math.max(...MONTHLY_STATS.map((m) => m.entries))
-  const weekTotal = DAILY_STATS.reduce((acc, d) => acc + d.entries, 0)
-  const avgDaily = (weekTotal / 7).toFixed(1)
+  const monthly = useMemo(
+    () =>
+      lastMonths(6).map((m) => ({
+        month: m.label,
+        Patients: db.patients.filter((p) => monthKey(p.createdAt) === m.key).length,
+        Scans: db.scans.filter((s) => monthKey(s.uploadedAt) === m.key).length,
+      })),
+    [db.patients, db.scans],
+  )
+
+  const bySite = groupCount(db.patients, (p) => p.site.split(" – ")[0]).sort((a, b) => a.name.localeCompare(b.name))
+  const byStaff = groupCount(db.patients, (p) => p.createdBy).sort((a, b) => b.value - a.value)
+
+  const n = db.patients.length || 1
+  const discharged = db.patients.filter((p) => p.status !== "Admitted")
+  const fu = db.patients.filter((p) => Date.now() - new Date(p.admittedAt).getTime() > 90 * 86_400_000)
+  const completeness = [
+    { field: "Demographics", pct: 100 },
+    { field: "Admission NIHSS", pct: (db.patients.filter((p) => p.nihssAdmission >= 0).length / n) * 100 },
+    { field: "MRI uploaded", pct: (db.patients.filter((p) => db.scans.some((s) => s.patientId === p.id)).length / n) * 100 },
+    { field: "Treatment (discharged)", pct: (discharged.filter((p) => p.treatment).length / (discharged.length || 1)) * 100 },
+    { field: "Discharge NIHSS", pct: (discharged.filter((p) => p.nihssDischarge !== undefined).length / (discharged.length || 1)) * 100 },
+    { field: "90-day mRS (eligible)", pct: (fu.filter((p) => p.mrs90 !== undefined).length / (fu.length || 1)) * 100 },
+  ]
+
+  const last7 = daily.slice(-7).reduce((a, d) => a + d.Patients + d.Scans, 0)
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader title="Entry Statistics" description="Data entry throughput and record completeness" icon={BarChart3} />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/data-entry">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Records entered (7 days)" value={last7} />
+        <StatCard label="My patient entries" value={db.patients.filter((p) => p.createdBy === user?.name).length} />
+        <StatCard label="My scan uploads" value={db.scans.filter((s) => s.uploadedBy === user?.name).length} />
+        <StatCard
+          label="Overall completeness"
+          value={`${Math.round(completeness.reduce((a, c) => a + c.pct, 0) / completeness.length)}%`}
+          tone="green"
+        />
+      </div>
 
-        <div className="flex items-center gap-3 mb-2">
-          <BarChart3 className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">Entry Statistics</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Track data entry progress</p>
-
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-4 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">47</div>
-                  <div className="text-sm text-muted-foreground">Today</div>
-                </div>
-                <Calendar className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{weekTotal}</div>
-                  <div className="text-sm text-muted-foreground">This Week</div>
-                </div>
-                <BarChart3 className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{avgDaily}</div>
-                  <div className="text-sm text-muted-foreground">Daily Average</div>
-                </div>
-                <TrendingUp className="h-8 w-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">98.3%</div>
-                  <div className="text-sm text-muted-foreground">Accuracy</div>
-                </div>
-                <Award className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Daily Entries Chart */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Daily Entries (This Week)</CardTitle>
-            <CardDescription>Number of records entered per day</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {DAILY_STATS.map((day) => (
-                <div key={day.date} className="flex items-center gap-4">
-                  <div className="w-12 text-sm font-medium">{day.date}</div>
-                  <div className="flex-1">
-                    <div className="h-10 bg-primary/10 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-primary flex items-center justify-end pr-4 text-sm font-medium text-white"
-                        style={{ width: `${(day.entries / maxDaily) * 100}%` }}
-                      >
-                        {day.entries}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Monthly Trend */}
+      <div className="grid gap-6 lg:grid-cols-2 mb-6">
         <Card>
           <CardHeader>
-            <CardTitle>Monthly Trend</CardTitle>
-            <CardDescription>6-month entry history</CardDescription>
+            <CardTitle>Last 14 days</CardTitle>
+            <CardDescription>New patients and scan uploads per day</CardDescription>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={daily}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="day" fontSize={11} />
+                <YAxis allowDecimals={false} fontSize={11} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="Patients" fill={CHART_COLORS[0]} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="Scans" fill={CHART_COLORS[5]} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Monthly volume</CardTitle>
+            <CardDescription>Last 6 months</CardDescription>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={monthly}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="month" fontSize={11} />
+                <YAxis allowDecimals={false} fontSize={11} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="Patients" fill={CHART_COLORS[0]} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="Scans" fill={CHART_COLORS[5]} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Field completeness</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {completeness.map((c) => (
+              <div key={c.field}>
+                <div className="flex justify-between text-sm mb-1">
+                  <span>{c.field}</span>
+                  <span className="font-medium tabular-nums">{c.pct.toFixed(0)}%</span>
+                </div>
+                <Progress value={c.pct} />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Patients by site</CardTitle>
+          </CardHeader>
+          <CardContent className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={bySite} layout="vertical" margin={{ left: 10 }}>
+                <XAxis type="number" allowDecimals={false} fontSize={11} />
+                <YAxis type="category" dataKey="name" width={60} fontSize={11} />
+                <Tooltip />
+                <Bar dataKey="value" name="Patients" fill={CHART_COLORS[0]} radius={[0, 3, 3, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Entries by staff member</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {MONTHLY_STATS.map((month, index) => (
-                <div key={month.month} className="flex items-center gap-4">
-                  <div className="w-16 text-sm text-muted-foreground">{month.month}</div>
-                  <div className="flex-1">
-                    <div className="h-10 bg-primary/10 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-primary flex items-center justify-end pr-4 text-sm font-medium text-white"
-                        style={{ width: `${(month.entries / maxMonthly) * 100}%` }}
-                      >
-                        {month.entries}
-                      </div>
-                    </div>
+            <ul className="space-y-3">
+              {byStaff.map((s) => (
+                <li key={s.name} className="text-sm">
+                  <div className="flex justify-between mb-1">
+                    <span className={s.name === user?.name ? "font-semibold" : ""}>
+                      {s.name}
+                      {s.name === user?.name && " (you)"}
+                    </span>
+                    <span className="tabular-nums">{s.value}</span>
                   </div>
-                  {index === MONTHLY_STATS.length - 1 && <TrendingUp className="h-5 w-5 text-green-500" />}
-                </div>
+                  <Progress value={(s.value / (byStaff[0]?.value || 1)) * 100} />
+                </li>
               ))}
-            </div>
+            </ul>
           </CardContent>
         </Card>
       </div>

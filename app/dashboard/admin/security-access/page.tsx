@@ -1,206 +1,186 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import { useMemo, useState } from "react"
+import { AlertTriangle, Download, Search, Shield, ShieldAlert } from "lucide-react"
+import { toast } from "sonner"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import Link from "next/link"
-import { ArrowLeft, Shield, Lock, Key, AlertTriangle } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { PageHeader } from "@/components/dashboard-shell"
+import { StatCard } from "@/components/common"
+import { useDB, useStore } from "@/lib/store"
+import { DEFAULT_PERMISSIONS } from "@/lib/seed"
+import { downloadFile, fmtDateTime, toCSV } from "@/lib/metrics"
+import { PERMISSION_LABELS, ROLE_LABELS, type Permission, type Role } from "@/lib/types"
 
-const ROLE_PERMISSIONS = [
-  {
-    role: "Doctor",
-    permissions: ["View patient cases", "Review AI diagnoses", "Access patient records", "View treatment outcomes"],
-    users: 8,
-  },
-  {
-    role: "Radiologist",
-    permissions: ["Analyze MRI scans", "Validate AI predictions", "View accuracy metrics", "Collaborate on cases"],
-    users: 5,
-  },
-  {
-    role: "Data Entry",
-    permissions: ["Input patient data", "Upload MRI scans", "Manage database records", "View entry statistics"],
-    users: 6,
-  },
-  {
-    role: "Analyst",
-    permissions: ["Perform statistical analysis", "Evaluate AI performance", "Generate reports", "Analyze trends"],
-    users: 3,
-  },
-  {
-    role: "Admin",
-    permissions: ["Manage users", "Configure system settings", "Control security", "View all analytics"],
-    users: 1,
-  },
-]
-
-const SECURITY_LOGS = [
-  {
-    id: "LOG-2024-089",
-    event: "Failed login attempt",
-    user: "unknown@external.com",
-    timestamp: "2024-01-15 14:23",
-    severity: "medium",
-  },
-  {
-    id: "LOG-2024-088",
-    event: "Password changed",
-    user: "sarah.chen@hospital.org",
-    timestamp: "2024-01-15 10:15",
-    severity: "low",
-  },
-  {
-    id: "LOG-2024-087",
-    event: "New user created",
-    user: "admin@system.org",
-    timestamp: "2024-01-14 16:30",
-    severity: "low",
-  },
-  {
-    id: "LOG-2024-086",
-    event: "Multiple failed login attempts",
-    user: "test@test.com",
-    timestamp: "2024-01-14 09:45",
-    severity: "high",
-  },
-]
+const ROLES = Object.keys(ROLE_LABELS) as Role[]
+const PERMS = Object.keys(PERMISSION_LABELS) as Permission[]
 
 export default function SecurityAccessPage() {
-  const router = useRouter()
+  const db = useDB()
+  const { setPermissions } = useStore()
+  const [q, setQ] = useState("")
+  const [sev, setSev] = useState("all")
+  const [limit, setLimit] = useState(25)
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "admin") {
-      router.push("/login")
+  const toggle = (role: Role, perm: Permission, on: boolean) => {
+    if (role === "admin" && (perm === "manage_users" || perm === "manage_settings")) {
+      toast.error("Administrators must keep user and settings management")
+      return
     }
-  }, [router])
+    const current = db.permissions[role]
+    setPermissions(role, on ? [...current, perm] : current.filter((p) => p !== perm))
+    toast.success(`${ROLE_LABELS[role]}: ${on ? "granted" : "revoked"} “${PERMISSION_LABELS[perm]}”`)
+  }
 
-  const totalUsers = ROLE_PERMISSIONS.reduce((acc, r) => acc + r.users, 0)
-  const highSeverityLogs = SECURITY_LOGS.filter((l) => l.severity === "high").length
+  const audit = useMemo(() => {
+    const n = q.trim().toLowerCase()
+    return db.audit
+      .filter((a) => sev === "all" || a.severity === sev)
+      .filter((a) => !n || `${a.user} ${a.action} ${a.detail}`.toLowerCase().includes(n))
+  }, [db.audit, q, sev])
+
+  const week = db.audit.filter((a) => Date.now() - new Date(a.at).getTime() < 7 * 86_400_000)
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader title="Security & Access" description="Role-based permissions and the platform audit trail" icon={Shield} />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/admin">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
-
-        <div className="flex items-center gap-3 mb-2">
-          <Shield className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">Security & Access</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Manage permissions and security</p>
-
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{totalUsers}</div>
-                  <div className="text-sm text-muted-foreground">Active Users</div>
-                </div>
-                <Key className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{ROLE_PERMISSIONS.length}</div>
-                  <div className="text-sm text-muted-foreground">User Roles</div>
-                </div>
-                <Shield className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{highSeverityLogs}</div>
-                  <div className="text-sm text-muted-foreground">Security Alerts</div>
-                </div>
-                <AlertTriangle className="h-8 w-8 text-red-500" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Role Permissions */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Role Permissions</CardTitle>
-            <CardDescription>Access control by user role</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {ROLE_PERMISSIONS.map((role) => (
-                <div key={role.role} className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="font-semibold text-lg">{role.role}</div>
-                      <Badge variant="outline">{role.users} users</Badge>
-                    </div>
-                    <Button size="sm" variant="outline">
-                      <Lock className="h-4 w-4 mr-2" />
-                      Edit Permissions
-                    </Button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {role.permissions.map((permission) => (
-                      <Badge key={permission} variant="secondary">
-                        {permission}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Security Logs */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Security Events</CardTitle>
-            <CardDescription>System security and access logs</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {SECURITY_LOGS.map((log) => (
-                <div key={log.id} className="flex items-center justify-between p-4 border rounded-lg">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-1">
-                      <div className="font-medium">{log.event}</div>
-                      <Badge
-                        variant={
-                          log.severity === "high" ? "destructive" : log.severity === "medium" ? "secondary" : "outline"
-                        }
-                      >
-                        {log.severity}
-                      </Badge>
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {log.user} • {log.timestamp}
-                    </div>
-                  </div>
-                  {log.severity === "high" && <AlertTriangle className="h-5 w-5 text-red-500" />}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Audit events (7 days)" value={week.length} />
+        <StatCard label="Failed logins (7 days)" value={week.filter((a) => a.action === "failed_login").length} tone="orange" icon={AlertTriangle} />
+        <StatCard label="Critical events (7 days)" value={week.filter((a) => a.severity === "critical").length} tone="red" icon={ShieldAlert} />
+        <StatCard label="Suspended accounts" value={db.users.filter((u) => u.status === "suspended").length} />
       </div>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle>Permission matrix</CardTitle>
+              <CardDescription>Changes take effect immediately (e.g. revoke “Annotate lesions” and the radiologist’s drawing tools lock).</CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => {
+                ROLES.forEach((r) => setPermissions(r, DEFAULT_PERMISSIONS[r]))
+                toast.success("Permissions restored to defaults")
+              }}
+            >
+              Restore defaults
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Permission</TableHead>
+                {ROLES.map((r) => (
+                  <TableHead key={r} className="text-center text-xs">
+                    {ROLE_LABELS[r]}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {PERMS.map((p) => (
+                <TableRow key={p}>
+                  <TableCell className="font-medium text-sm">{PERMISSION_LABELS[p]}</TableCell>
+                  {ROLES.map((r) => (
+                    <TableCell key={r} className="text-center">
+                      <Checkbox checked={db.permissions[r].includes(p)} onCheckedChange={(on) => toggle(r, p, !!on)} aria-label={`${r} ${p}`} />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle>Audit log</CardTitle>
+              <CardDescription>{audit.length} events · every action on the platform is recorded here</CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => {
+                downloadFile("audit-log.csv", toCSV(audit.map((a) => ({ time: a.at, user: a.user, action: a.action, detail: a.detail, severity: a.severity }))), "text/csv")
+                toast.success("Audit log exported")
+              }}
+            >
+              <Download className="h-4 w-4 mr-2" /> Export
+            </Button>
+          </div>
+          <div className="flex flex-col gap-2 md:flex-row pt-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input className="pl-10" placeholder="Filter by user, action or detail…" value={q} onChange={(e) => setQ(e.target.value)} />
+            </div>
+            <Select value={sev} onValueChange={setSev}>
+              <SelectTrigger className="md:w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All severities</SelectItem>
+                <SelectItem value="info">Info</SelectItem>
+                <SelectItem value="warning">Warning</SelectItem>
+                <SelectItem value="critical">Critical</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Time</TableHead>
+                <TableHead>User</TableHead>
+                <TableHead>Action</TableHead>
+                <TableHead>Detail</TableHead>
+                <TableHead>Severity</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {audit.slice(0, limit).map((a) => (
+                <TableRow key={a.id}>
+                  <TableCell className="text-xs whitespace-nowrap">{fmtDateTime(a.at)}</TableCell>
+                  <TableCell className="text-sm">{a.user}</TableCell>
+                  <TableCell className="font-mono text-xs">{a.action}</TableCell>
+                  <TableCell className="text-sm">{a.detail}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={
+                        a.severity === "critical"
+                          ? "bg-red-50 text-red-700 border-red-200"
+                          : a.severity === "warning"
+                            ? "bg-amber-50 text-amber-700 border-amber-200"
+                            : "bg-slate-50 text-slate-600"
+                      }
+                    >
+                      {a.severity}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {audit.length > limit && (
+            <Button variant="outline" className="w-full mt-4" onClick={() => setLimit((l) => l + 25)}>
+              Load more
+            </Button>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

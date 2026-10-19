@@ -1,169 +1,234 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import { useState } from "react"
+import { Download, Eye, FilePlus2, FileText, Pencil, Send, Trash2 } from "lucide-react"
+import { toast } from "sonner"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import Link from "next/link"
-import { ArrowLeft, FileText, Download, Eye, Plus } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
+import { PageHeader } from "@/components/dashboard-shell"
+import { StatCard } from "@/components/common"
+import { useDB, useStore } from "@/lib/store"
+import { downloadFile, fmtDate } from "@/lib/metrics"
+import { buildReport, renderMarkdown } from "@/lib/reports"
+import type { Report } from "@/lib/types"
 
-const REPORTS = [
-  {
-    id: "RPT-2024-001",
-    title: "AI Model Performance Analysis Q1 2024",
-    description: "Comprehensive evaluation of stroke detection accuracy across all classifications",
-    author: "Dr. Emily Rodriguez",
-    date: "2024-01-15",
-    status: "published",
-    pages: 24,
-    downloads: 47,
-  },
-  {
-    id: "RPT-2023-012",
-    title: "Age and Gender Distribution in Stroke Patients",
-    description: "Statistical analysis of demographic factors in the study cohort",
-    author: "Dr. Michael Chen",
-    date: "2023-12-20",
-    status: "published",
-    pages: 18,
-    downloads: 63,
-  },
-  {
-    id: "RPT-2024-002",
-    title: "Correlation Between NIHSS Scores and Lesion Volume",
-    description: "Examining the relationship between stroke severity and MRI findings",
-    author: "Dr. Sarah Thompson",
-    date: "2024-01-10",
-    status: "draft",
-    pages: 15,
-    downloads: 0,
-  },
-  {
-    id: "RPT-2023-011",
-    title: "Multi-Center Study Results: 6-Month Analysis",
-    description: "Interim findings from all participating institutions",
-    author: "Dr. James Wilson",
-    date: "2023-12-05",
-    status: "published",
-    pages: 32,
-    downloads: 89,
-  },
-]
+const KINDS: Report["kind"][] = ["Cohort summary", "AI performance", "Interim analysis", "Site comparison"]
 
 export default function ResearchReportsPage() {
-  const router = useRouter()
+  const db = useDB()
+  const { addReport, updateReport, deleteReport, can, log } = useStore()
+  const [genOpen, setGenOpen] = useState(false)
+  const [kind, setKind] = useState<Report["kind"]>("Cohort summary")
+  const [title, setTitle] = useState("")
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [mode, setMode] = useState<"view" | "edit">("view")
+  const [draft, setDraft] = useState("")
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "analyst") {
-      router.push("/login")
-    }
-  }, [router])
+  const open = db.reports.find((r) => r.id === openId) ?? null
+  const reports = [...db.reports].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
-  const publishedReports = REPORTS.filter((r) => r.status === "published").length
-  const draftReports = REPORTS.filter((r) => r.status === "draft").length
-  const totalDownloads = REPORTS.reduce((acc, r) => acc + r.downloads, 0)
+  const generate = () => {
+    const r = addReport({
+      title: title.trim() || `${kind} – ${new Date().toLocaleDateString(undefined, { month: "short", year: "numeric" })}`,
+      kind,
+      status: "draft",
+      content: buildReport(db, kind),
+    })
+    toast.success(`${r.id} generated from live data`)
+    setGenOpen(false)
+    setTitle("")
+    setOpenId(r.id)
+    setMode("view")
+  }
+
+  const download = (r: Report) => {
+    if (!can("export_data")) return toast.error("Your role lacks the export permission")
+    downloadFile(`${r.id}-${r.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`, r.content, "text/markdown")
+    log("export_report", `Downloaded ${r.id}`)
+  }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/analyst">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
-
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-3">
-            <FileText className="h-8 w-8 text-primary" />
-            <h1 className="text-3xl font-bold">Research Reports</h1>
-          </div>
-          <Button>
-            <Plus className="h-4 w-4 mr-2" />
-            New Report
+    <div>
+      <PageHeader
+        title="Research Reports"
+        description="Generate study reports from live data, edit, publish and download"
+        icon={FileText}
+        actions={
+          <Button onClick={() => setGenOpen(true)}>
+            <FilePlus2 className="h-4 w-4 mr-2" /> Generate report
           </Button>
-        </div>
-        <p className="text-muted-foreground mb-8">Generate study findings and reports</p>
+        }
+      />
 
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-primary">{publishedReports}</div>
-              <div className="text-sm text-muted-foreground">Published Reports</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-primary">{draftReports}</div>
-              <div className="text-sm text-muted-foreground">Draft Reports</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-primary">{totalDownloads}</div>
-              <div className="text-sm text-muted-foreground">Total Downloads</div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Reports List */}
-        <div className="space-y-4">
-          {REPORTS.map((report) => (
-            <Card key={report.id} className="hover:shadow-md transition-shadow">
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <CardTitle className="text-lg">{report.title}</CardTitle>
-                      <Badge variant={report.status === "published" ? "default" : "secondary"}>
-                        {report.status === "published" ? "Published" : "Draft"}
-                      </Badge>
-                    </div>
-                    <CardDescription>
-                      {report.id} • {report.date}
-                    </CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-4">{report.description}</p>
-                <div className="grid md:grid-cols-3 gap-4 mb-4">
-                  <div>
-                    <div className="text-sm font-medium mb-1">Author</div>
-                    <div className="text-sm text-muted-foreground">{report.author}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Pages</div>
-                    <div className="text-sm text-muted-foreground">{report.pages} pages</div>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium mb-1">Downloads</div>
-                    <div className="text-sm text-muted-foreground">{report.downloads} downloads</div>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" className="flex-1">
-                    <Eye className="h-4 w-4 mr-2" />
-                    View Report
-                  </Button>
-                  {report.status === "published" && (
-                    <Button size="sm" variant="outline" className="flex-1 bg-transparent">
-                      <Download className="h-4 w-4 mr-2" />
-                      Download PDF
-                    </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
+        <StatCard label="Total reports" value={db.reports.length} />
+        <StatCard label="Published" value={db.reports.filter((r) => r.status === "published").length} tone="green" />
+        <StatCard label="Drafts" value={db.reports.filter((r) => r.status === "draft").length} tone="orange" />
       </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {reports.map((r) => (
+          <Card key={r.id} className="flex flex-col">
+            <CardHeader className="flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <FileText className="h-7 w-7 text-primary" />
+                <Badge variant={r.status === "published" ? "default" : "secondary"}>{r.status}</Badge>
+              </div>
+              <CardTitle className="mt-2 text-lg">{r.title}</CardTitle>
+              <CardDescription>
+                {r.kind} · {r.author} · {fmtDate(r.createdAt)}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex gap-2">
+              <Button
+                size="sm"
+                className="flex-1"
+                onClick={() => {
+                  setOpenId(r.id)
+                  setMode("view")
+                }}
+              >
+                <Eye className="h-4 w-4 mr-1" /> Open
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => download(r)} aria-label="Download">
+                <Download className="h-4 w-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                aria-label="Delete"
+                onClick={() => {
+                  deleteReport(r.id)
+                  toast.success(`${r.id} deleted`)
+                }}
+              >
+                <Trash2 className="h-4 w-4 text-red-600" />
+              </Button>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <Dialog open={genOpen} onOpenChange={setGenOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate report</DialogTitle>
+            <DialogDescription>The report is built from the current study data and saved as a draft.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Report type</Label>
+              <Select value={kind} onValueChange={(v) => setKind(v as Report["kind"])}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {KINDS.map((k) => (
+                    <SelectItem key={k} value={k}>
+                      {k}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="rt">Title (optional)</Label>
+              <Input id="rt" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`${kind} – ${new Date().getFullYear()}`} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGenOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={generate}>Generate</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!open} onOpenChange={(o) => !o && setOpenId(null)}>
+        <DialogContent className="sm:max-w-3xl max-h-[92vh] overflow-y-auto">
+          {open && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  {open.title} <Badge variant={open.status === "published" ? "default" : "secondary"}>{open.status}</Badge>
+                </DialogTitle>
+                <DialogDescription>
+                  {open.id} · {open.kind} · {open.author} · {fmtDate(open.createdAt)}
+                </DialogDescription>
+              </DialogHeader>
+              <Tabs
+                value={mode}
+                onValueChange={(v) => {
+                  if (v === "edit") setDraft(open.content)
+                  setMode(v as "view" | "edit")
+                }}
+              >
+                <TabsList>
+                  <TabsTrigger value="view">
+                    <Eye className="h-4 w-4 mr-1" /> Preview
+                  </TabsTrigger>
+                  <TabsTrigger value="edit">
+                    <Pencil className="h-4 w-4 mr-1" /> Edit
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="view">
+                  <article className="rounded-lg border p-5 text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(open.content) }} />
+                </TabsContent>
+                <TabsContent value="edit" className="space-y-2">
+                  <Textarea rows={18} className="font-mono text-xs" value={draft} onChange={(e) => setDraft(e.target.value)} />
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => {
+                        updateReport(open.id, { content: draft })
+                        toast.success("Report saved")
+                        setMode("view")
+                      }}
+                    >
+                      Save changes
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setDraft(buildReport(db, open.kind))
+                        toast.info("Regenerated from latest data – save to keep")
+                      }}
+                    >
+                      Regenerate from live data
+                    </Button>
+                  </div>
+                </TabsContent>
+              </Tabs>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => download(open)}>
+                  <Download className="h-4 w-4 mr-2" /> Download .md
+                </Button>
+                {open.status === "draft" ? (
+                  <Button
+                    onClick={() => {
+                      updateReport(open.id, { status: "published" })
+                      toast.success("Report published")
+                    }}
+                  >
+                    <Send className="h-4 w-4 mr-2" /> Publish
+                  </Button>
+                ) : (
+                  <Button variant="outline" onClick={() => updateReport(open.id, { status: "draft" })}>
+                    Unpublish
+                  </Button>
+                )}
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

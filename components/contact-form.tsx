@@ -8,8 +8,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { CheckCircle2 } from "lucide-react"
+import { useStore } from "@/lib/store"
 
 export function ContactForm() {
+  const { addInquiry } = useStore()
   const [submitted, setSubmitted] = useState(false)
   const [formData, setFormData] = useState({
     name: "",
@@ -20,6 +22,8 @@ export function ContactForm() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    // lands in the admin's System Analytics → Inquiries inbox
+    addInquiry(formData)
     setSubmitted(true)
     // Reset form after 5 seconds
     setTimeout(() => {

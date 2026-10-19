@@ -1,228 +1,132 @@
 "use client"
 
-import { useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Navigation } from "@/components/navigation"
+import { useMemo, useState } from "react"
+import { Brain, Download } from "lucide-react"
+import { toast } from "sonner"
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import Link from "next/link"
-import { ArrowLeft, Brain, Target, TrendingUp, AlertCircle } from "lucide-react"
-
-const PERFORMANCE_METRICS = {
-  overall: {
-    accuracy: 94.2,
-    sensitivity: 92.8,
-    specificity: 95.6,
-    precision: 91.4,
-    recall: 92.8,
-    f1Score: 92.1,
-    auc: 0.967,
-  },
-  confusionMatrix: {
-    truePositive: 1089,
-    trueNegative: 82,
-    falsePositive: 38,
-    falseNegative: 38,
-  },
-}
-
-const MODEL_VERSIONS = [
-  { version: "v1.0", date: "2023-08-01", accuracy: 89.3, auc: 0.921 },
-  { version: "v1.1", date: "2023-09-15", accuracy: 91.2, auc: 0.938 },
-  { version: "v1.2", date: "2023-11-01", accuracy: 92.8, auc: 0.951 },
-  { version: "v2.0", date: "2024-01-01", accuracy: 94.2, auc: 0.967 },
-]
+import { Slider } from "@/components/ui/slider"
+import { PageHeader } from "@/components/dashboard-shell"
+import { CHART_COLORS, StatCard } from "@/components/common"
+import { ConfusionMatrix, MetricTiles } from "@/components/charts"
+import { useDB, useStore } from "@/lib/store"
+import { adjudicated, confusion, downloadFile, pct, roc, scores, toCSV } from "@/lib/metrics"
+import { MODELS } from "@/lib/types"
 
 export default function AIPerformancePage() {
-  const router = useRouter()
+  const db = useDB()
+  const { can, log } = useStore()
+  const [threshold, setThreshold] = useState(0.5)
+  const adj = useMemo(() => adjudicated(db.scans), [db.scans])
 
-  useEffect(() => {
-    const storedRole = sessionStorage.getItem("userRole")
-    if (storedRole !== "analyst") {
-      router.push("/login")
-    }
-  }, [router])
+  // ensemble probability = mean of the three backbones
+  const ensembleProb = (id: string) => {
+    const s = adj.find((x) => x.id === id)!
+    return MODELS.reduce((a, m) => a + s.ai!.modelProbs[m], 0) / MODELS.length
+  }
+  const cThresh = confusion(adj, (s) => ensembleProb(s.id) >= threshold)
+  const cDefault = confusion(adj)
+  const sDefault = scores(cDefault)
 
-  const { truePositive, trueNegative, falsePositive, falseNegative } = PERFORMANCE_METRICS.confusionMatrix
-  const total = truePositive + trueNegative + falsePositive + falseNegative
+  const versions = [...new Set(adj.map((s) => s.ai!.modelVersion))].sort()
+  const byVersion = versions.map((v) => {
+    const l = adj.filter((s) => s.ai!.modelVersion === v)
+    const s = scores(confusion(l))
+    return { version: v.replace("StrokeNet ", ""), Accuracy: +(s.accuracy * 100).toFixed(1), Sensitivity: +(s.sensitivity * 100).toFixed(1), Specificity: +(s.specificity * 100).toFixed(1), n: l.length }
+  })
+
+  const aucs = MODELS.map((m) => ({ m, auc: roc(adj, m).auc }))
+
+  const exportMetrics = () => {
+    if (!can("export_data")) return toast.error("Your role lacks the export permission")
+    const rows = adj.map((s) => ({
+      scan_id: s.id,
+      sequence: s.sequence,
+      model_version: s.ai!.modelVersion,
+      ai_label: s.ai!.label,
+      ai_confidence: s.ai!.confidence,
+      resnet50: s.ai!.modelProbs.ResNet50,
+      efficientnet_b4: s.ai!.modelProbs["EfficientNet-B4"],
+      densenet121: s.ai!.modelProbs.DenseNet121,
+      truth: s.expertValidation?.finalLabel ?? s.radiologistReview?.finalLabel,
+    }))
+    downloadFile("ai-predictions-vs-truth.csv", toCSV(rows), "text/csv")
+    log("export_data", `Exported ${rows.length} AI predictions with ground truth`, "warning")
+    toast.success("Prediction-level data exported")
+  }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
+    <div>
+      <PageHeader
+        title="AI Performance"
+        description="Model accuracy against adjudicated ground truth"
+        icon={Brain}
+        actions={
+          <Button variant="outline" onClick={exportMetrics}>
+            <Download className="h-4 w-4 mr-2" /> Export predictions CSV
+          </Button>
+        }
+      />
 
-      <div className="container mx-auto px-4 pt-24 pb-20">
-        <Button variant="ghost" className="mb-6" asChild>
-          <Link href="/dashboard/analyst">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Link>
-        </Button>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Adjudicated scans" value={adj.length} />
+        <StatCard label="Accuracy" value={pct(sDefault.accuracy)} tone="green" />
+        <StatCard label="Sensitivity" value={pct(sDefault.sensitivity)} />
+        <StatCard label="Best single-model AUC" value={Math.max(...aucs.map((a) => a.auc)).toFixed(3)} hint={aucs.sort((a, b) => b.auc - a.auc)[0]?.m} />
+      </div>
 
-        <div className="flex items-center gap-3 mb-2">
-          <Brain className="h-8 w-8 text-primary" />
-          <h1 className="text-3xl font-bold">AI Performance</h1>
-        </div>
-        <p className="text-muted-foreground mb-8">Evaluate model accuracy and metrics</p>
-
-        {/* Key Metrics */}
-        <div className="grid md:grid-cols-4 gap-4 mb-8">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{PERFORMANCE_METRICS.overall.accuracy}%</div>
-                  <div className="text-sm text-muted-foreground">Accuracy</div>
-                </div>
-                <Target className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{PERFORMANCE_METRICS.overall.auc}</div>
-                  <div className="text-sm text-muted-foreground">AUC-ROC</div>
-                </div>
-                <TrendingUp className="h-8 w-8 text-green-500" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{PERFORMANCE_METRICS.overall.sensitivity}%</div>
-                  <div className="text-sm text-muted-foreground">Sensitivity</div>
-                </div>
-                <Brain className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-2xl font-bold text-primary">{PERFORMANCE_METRICS.overall.specificity}%</div>
-                  <div className="text-sm text-muted-foreground">Specificity</div>
-                </div>
-                <AlertCircle className="h-8 w-8 text-primary" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Detailed Metrics */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Detailed Performance Metrics</CardTitle>
-            <CardDescription>Comprehensive evaluation of model performance</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid md:grid-cols-3 gap-6">
-              <div className="space-y-3">
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">Precision (PPV)</div>
-                  <div className="text-2xl font-bold">{PERFORMANCE_METRICS.overall.precision}%</div>
-                </div>
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">Recall (Sensitivity)</div>
-                  <div className="text-2xl font-bold">{PERFORMANCE_METRICS.overall.recall}%</div>
-                </div>
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">F1 Score</div>
-                  <div className="text-2xl font-bold">{PERFORMANCE_METRICS.overall.f1Score}%</div>
-                </div>
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">Specificity (TNR)</div>
-                  <div className="text-2xl font-bold">{PERFORMANCE_METRICS.overall.specificity}%</div>
-                </div>
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">AUC-ROC</div>
-                  <div className="text-2xl font-bold">{PERFORMANCE_METRICS.overall.auc}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">Total Cases</div>
-                  <div className="text-2xl font-bold">{total}</div>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Confusion Matrix */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Confusion Matrix</CardTitle>
-            <CardDescription>Classification results breakdown</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-4 max-w-2xl mx-auto">
-              <div className="border-2 border-green-500 rounded-lg p-6 text-center bg-green-50 dark:bg-green-950">
-                <div className="text-3xl font-bold text-green-700 dark:text-green-300">{truePositive}</div>
-                <div className="text-sm font-medium mt-2">True Positive</div>
-                <div className="text-xs text-muted-foreground mt-1">Correctly identified strokes</div>
-              </div>
-              <div className="border-2 border-orange-500 rounded-lg p-6 text-center bg-orange-50 dark:bg-orange-950">
-                <div className="text-3xl font-bold text-orange-700 dark:text-orange-300">{falsePositive}</div>
-                <div className="text-sm font-medium mt-2">False Positive</div>
-                <div className="text-xs text-muted-foreground mt-1">Incorrectly flagged as stroke</div>
-              </div>
-              <div className="border-2 border-red-500 rounded-lg p-6 text-center bg-red-50 dark:bg-red-950">
-                <div className="text-3xl font-bold text-red-700 dark:text-red-300">{falseNegative}</div>
-                <div className="text-sm font-medium mt-2">False Negative</div>
-                <div className="text-xs text-muted-foreground mt-1">Missed stroke cases</div>
-              </div>
-              <div className="border-2 border-blue-500 rounded-lg p-6 text-center bg-blue-50 dark:bg-blue-950">
-                <div className="text-3xl font-bold text-blue-700 dark:text-blue-300">{trueNegative}</div>
-                <div className="text-sm font-medium mt-2">True Negative</div>
-                <div className="text-xs text-muted-foreground mt-1">Correctly identified no stroke</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Model Version History */}
+      <div className="grid gap-6 lg:grid-cols-2 mb-6">
         <Card>
           <CardHeader>
-            <CardTitle>Model Version History</CardTitle>
-            <CardDescription>Performance improvements over time</CardDescription>
+            <CardTitle>Production model</CardTitle>
+            <CardDescription>Deployed classifications (as shown to clinicians)</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {MODEL_VERSIONS.map((version, index) => (
-                <div key={version.version} className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <div className="font-semibold">{version.version}</div>
-                      <div className="text-sm text-muted-foreground">{version.date}</div>
-                    </div>
-                    {index === MODEL_VERSIONS.length - 1 && (
-                      <div className="px-3 py-1 bg-primary text-primary-foreground text-xs font-medium rounded-full">
-                        Current
-                      </div>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="text-sm text-muted-foreground">Accuracy</div>
-                      <div className="text-xl font-bold text-primary">{version.accuracy}%</div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-muted-foreground">AUC-ROC</div>
-                      <div className="text-xl font-bold text-primary">{version.auc}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+          <CardContent className="space-y-6">
+            <ConfusionMatrix c={cDefault} />
+            <MetricTiles c={cDefault} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Threshold explorer</CardTitle>
+            <CardDescription>How the ensemble behaves if the decision threshold is moved</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div>
+              <div className="flex justify-between text-sm mb-2">
+                <span>Decision threshold</span>
+                <span className="font-mono font-semibold">{threshold.toFixed(2)}</span>
+              </div>
+              <Slider value={[threshold]} min={0.05} max={0.95} step={0.05} onValueChange={([v]) => setThreshold(v)} />
+              <p className="mt-2 text-xs text-muted-foreground">Lower thresholds catch more strokes (sensitivity) at the cost of more false alarms.</p>
             </div>
+            <ConfusionMatrix c={cThresh} />
+            <MetricTiles c={cThresh} />
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Performance by model version</CardTitle>
+          <CardDescription>Adjudicated scans grouped by the model version that produced the prediction</CardDescription>
+        </CardHeader>
+        <CardContent className="h-80">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={byVersion}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="version" fontSize={11} tickFormatter={(v) => `${v} (n=${byVersion.find((b) => b.version === v)?.n})`} />
+              <YAxis domain={[0, 100]} unit="%" fontSize={11} />
+              <Tooltip formatter={(v: number) => `${v}%`} />
+              <Legend />
+              <Bar dataKey="Accuracy" fill={CHART_COLORS[0]} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="Sensitivity" fill={CHART_COLORS[1]} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="Specificity" fill={CHART_COLORS[2]} radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
     </div>
   )
 }
